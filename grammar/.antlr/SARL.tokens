@@ -1,0 +1,17 @@
+T__0=1
+T__1=2
+T__2=3
+T__3=4
+TAKEOFF=5
+LAND=6
+GOTO=7
+INT=8
+WS=9
+COMMENT=10
+';'=1
+'('=2
+','=3
+')'=4
+'takeoff'=5
+'land'=6
+'goto'=7

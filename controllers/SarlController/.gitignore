@@ -1,0 +1,24 @@
+# Compilados y temporales
+target/
+*.class
+*.log
+*.tmp
+*.bak
+*.swp
+*.DS_Store
+
+# Webots
+controllers/*/*.exe
+controllers/*/*.class
+controllers/*/*.dll
+controllers/*/*.pyc
+
+# IntelliJ / VS Code
+.idea/
+.vscode/
+*.iml
+
+# Maven
+dependency-reduced-pom.xml
+.mvn/
+.settings/

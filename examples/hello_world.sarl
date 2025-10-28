@@ -1,0 +1,3 @@
+takeoff;
+goto(10,20);
+land;

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    
+    <modelVersion>4.0.0</modelVersion>
+    
+    <groupId>es.upm.sarl</groupId>
+    <artifactId>SARL-TFG</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <name>SARL-TFG</name>
+    
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <antlr4.plugin.version>4.13.1</antlr4.plugin.version>
+        <antlr4.version>4.13.1</antlr4.version>
+    </properties>
+    
+    <dependencies>
+        <!-- ANTLR runtime -->
+        <dependency>
+            <groupId>org.antlr</groupId>
+            <artifactId>antlr4-runtime</artifactId>
+            <version>${antlr4.version}</version>
+        </dependency>
+        
+        <!-- Webots Java controller (ruta local en tu instalación) -->
+        <dependency>
+            <groupId>com.cyberbotics</groupId>
+            <artifactId>webots-controller</artifactId>
+            <version>R2023b</version>
+            <scope>system</scope>
+            <systemPath>C:/Program Files/Webots/lib/controller/java/Controller.jar</systemPath>
+        </dependency>
+    </dependencies>
+    
+    <build>
+        <plugins>
+            <!-- ANTLR4 plugin -->
+            <plugin>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-maven-plugin</artifactId>
+                <version>${antlr4.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>antlr4</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirectory>${project.basedir}/grammar</sourceDirectory>
+                            <outputDirectory>${project.basedir}/src/main/java/es/upm/sarl/gen</outputDirectory>
+                            <visitor>true</visitor>
+                            <listener>false</listener>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            
+            <!-- Compiler plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <release>21</release>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
