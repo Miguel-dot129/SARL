@@ -8,8 +8,8 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 WorldInfo {
 }
 Viewpoint {
-  orientation -0.3878125979428738 0.37823773461262217 0.84055791293159 1.768197822398769
-  position 0.5426555742324674 -2.835460205575968 3.04502600212202
+  orientation -0.30931529204579866 0.3070057414698185 0.9000397351290603 1.683377984942609
+  position 0.0655526660751316 -9.34355005389774 7.276016993059984
 }
 Mavic2Pro {
   translation 0.5 0 0.065
@@ -30,5 +30,5 @@ TexturedBackground {
 TexturedBackgroundLight {
 }
 RectangleArena {
-  floorSize 2 2
+  floorSize 5 5
 }
