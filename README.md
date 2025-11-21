@@ -12,11 +12,11 @@ Este repositorio está organizado para facilitar la lectura, pruebas y revisión
 |-- grammar/             # Futuros ficheros .g4 de ANTLR para definir la gramática del lenguaje
 |-- examples/            # Archivos .sarl de ejemplo para imaginar misiones escritas con el lenguaje deseado
 |   |-- README.md        # Explica el uso imaginativo y no definitivo de los archivos SARL
-|-- controller/          # Implementación del controlador en Java para Webots
-|   |-- Controlador_V0.java      # Versión funcional actual del controlador para Webots
-|   |-- ControladorV1.java       # Versión experimental anterior (descartada)
-|   |-- ControladorV1_alt.java   # Otra versión experimental fallida
-|-- interpreter/         # Código Java para interpretar comandos del lenguaje definido (ANTLR)
+|-- controller/          # Implementación del controlador en Java para Webots, dentro de la carpeta \src\main\java\es\upm\sarl\
+|   |-- Controlador.java      # Versión funcional actual del controlador para Webots
+|   |-- Controlador_ejemplo_no_operativo.java       # Versión experimental anterior (descartada)
+|   |-- Controlador_ejemplo_no_operativo_2.java   # Otra versión experimental fallida
+|-- interpreter/         # Código Java para interpretar comandos del lenguaje definido (ANTLR), dentro de la carpeta \src\main\java\es\upm\sarl\
 |   |-- Interpreter.java
 |   |-- Runner.java
 |   |-- Adapter.java
@@ -41,7 +41,7 @@ Contiene archivos `.sarl` que representan misiones imaginarias escritas con una 
 
 ### controller/
 
-Implementación en Java de los controladores utilizados en Webots. `Controlador_V0.java` es la versión actual y estable. Los otros archivos son intentos anteriores y se mantienen solo como referencia histórica. 
+Implementación en Java de los controladores utilizados en Webots. `Controlador.java` es la versión actual y estable. Los otros archivos son intentos anteriores y se mantienen solo como referencia histórica. 
 
 ### interpreter/
 
