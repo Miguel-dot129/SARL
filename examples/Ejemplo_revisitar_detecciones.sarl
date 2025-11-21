@@ -1,0 +1,52 @@
+mission SAR_RevisitDetections:
+
+  # 1. CONFIGURACIÓN INICIAL
+  setObjective("revisit_detections")
+  setHome(0, 0, 0)
+  setAltitude(15)
+  setSpeed(3)
+
+  # 2. PARÁMETROS DE CONFIRMACIÓN
+  let HIGH_CONF = 0.75
+  let MAX_HOLD_TIME = 30
+
+  # 3. INICIALIZACIÓN DEL ITERADOR DE DETECCIONES
+  resetRecordedDetectionsIterator()
+  let found = false
+
+  # empezamos con la primera detección registrada por encima de cierto umbral
+  let det = nextRecordedDetection(0.5)   # por ejemplo, solo detecciones con conf >= 0.5
+
+  # 4. VISITA SECUENCIAL DE DETECCIONES
+  while (det != null) and (not found):
+
+    # vamos directamente a la posición detectada
+    gotoPosition(det.position)
+    hold(2)
+
+    let elapsed = 0
+    let confirmed = false
+
+    # bucle de confirmación in situ
+    while (not confirmed) and (elapsed < MAX_HOLD_TIME):
+      let currentConf = getDetectionConfidence()
+      if currentConf >= HIGH_CONF:
+        confirmed = true
+      else:
+        hold(1)
+        elapsed = elapsed + 1
+
+    if confirmed:
+      report("target confirmed while revisiting detections")
+      returnHome()
+      land()
+      found = true
+    else:
+      # pasamos a la siguiente detección registrada
+      det = nextRecordedDetection(0.5)
+
+  # 5. SI NINGUNA DETECCIÓN SE CONFIRMA
+  if not found:
+    report("no detection confirmed during revisit")
+    returnHome()
+    land()

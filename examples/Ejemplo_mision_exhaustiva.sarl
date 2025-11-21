@@ -1,0 +1,76 @@
+mission SAR_Exhaustive:
+
+  # 1. CONFIGURACIÓN INICIAL
+  setObjective("locate_person")
+  setHome(0, 0, 0)
+  setAltitude(15)
+  setSpeed(3)
+
+  # 2. DEFINICIÓN DEL ÁREA A PARTIR DE PUNTOS
+  let area1 = AREA_FROM_POINTS(
+    10, 10,
+    120, 10,
+    120, 80,
+    10, 80
+  )
+  defineArea(area1)
+
+  # 3. VARIABLES DE ESTADO
+  let found = false
+  let attempts = 0
+  let maxAttempts = 2        # por ejemplo, dos pasadas completas
+
+  # thresholds para la confirmación in situ
+  let HIGH_CONF = 0.75
+  let MAX_HOLD_TIME = 30
+
+  # 4. BÚSQUEDA EXHAUSTIVA
+  while (not found) and (attempts < maxAttempts):
+
+    let step = nextPatternStep("grid", area1)
+
+    while (step != null) and (not found):
+
+      followStep(step)
+
+      # si hay cualquier detección, nos detenemos siempre
+      if lastDetection.exists:
+
+        gotoDetection()
+        hold(2)
+
+        let elapsed = 0
+        let confirmed = false
+
+        # confirmación in situ: esperamos hasta que la confianza suba o se agote el tiempo
+        while (not confirmed) and (elapsed < MAX_HOLD_TIME):
+          let currentConf = getDetectionConfidence()
+          if currentConf >= HIGH_CONF:
+            confirmed = true
+          else:
+            hold(1)
+            elapsed = elapsed + 1
+
+        if confirmed:
+          report("target confirmed (exhaustive mode)")
+          returnHome()
+          land()
+          found = true
+        else:
+          # no se confirmó: volvemos al patrón y seguimos
+          resumePattern()
+
+      # fin del if lastDetection.exists
+
+      # siguiente paso del patrón
+      step = nextPatternStep("grid", area1)
+
+    attempts = attempts + 1
+
+  # 5. SI NO ENCONTRAMOS NADA TRAS LOS INTENTOS
+  if not found:
+    report("no target found in area (exhaustive mode)")
+    returnHome()
+    land()
+
+

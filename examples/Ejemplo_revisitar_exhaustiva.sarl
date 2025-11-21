@@ -1,0 +1,50 @@
+mission SAR_LocalSweeps:
+
+  # 1. CONFIGURACIÓN INICIAL
+  setObjective("local_sweep_around_detections")
+  setHome(0, 0, 0)
+  setAltitude(15)
+  setSpeed(2)
+
+  # 2. PARÁMETROS
+  let LOCAL_RADIUS = 20          # tamaño del área local alrededor de cada detección
+  let HIGH_CONF = 0.75
+  let MAX_HOLD_TIME = 20
+
+  # 3. ITERADOR DE DETECCIONES (p.ej. conf >= 0.5)
+  resetRecordedDetectionsIterator()
+  let det = nextRecordedDetection(0.5)
+  let found = false
+
+  # 4. PARA CADA DETECCIÓN, HACEMOS UN BARRIDO LOCAL
+  while (det != null) and (not found):
+
+    # definimos un área local alrededor de la detección
+    let localArea = AREA_AROUND_POINT(det.position, LOCAL_RADIUS)
+    defineArea(localArea)
+
+    # patrón de barrido local (puede ser un grid más denso)
+    let step = nextPatternStep("local_grid", localArea)
+
+    while (step != null) and (not found):
+
+      followStep(step)
+
+      if lastDetection.exists and (lastDetection.conf >= HIGH_CONF):
+        found = true
+        gotoDetection()
+        hold(2)
+        report("target confirmed during local sweep")
+        returnHome()
+        land()
+
+      step = nextPatternStep("local_grid", localArea)
+
+    # si no se confirmó nada en este punto, pasamos al siguiente
+    det = nextRecordedDetection(0.5)
+
+  # 5. SI NINGÚN BARRIDO LOCAL ENCUENTRA EL OBJETIVO
+  if not found:
+    report("no target confirmed in local sweeps")
+    returnHome()
+    land()

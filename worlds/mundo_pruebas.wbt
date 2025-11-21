@@ -12,18 +12,8 @@ Viewpoint {
   position 0.0655526660751316 -9.34355005389774 7.276016993059984
 }
 Mavic2Pro {
-  translation 0.5 0 0.065
   name "Mavic_external"
   controller "<extern>"
-}
-Mavic2Pro {
-  translation -0.5 -2.94833e-07 0.0655727
-  rotation 6.36643411142534e-05 -0.9999999979626493 -4.6425376848287336e-06 0.07011179589256604
-  name "Mavic_Internal"
-  controller "SarlController"
-  battery [
-    0
-  ]
 }
 TexturedBackground {
 }

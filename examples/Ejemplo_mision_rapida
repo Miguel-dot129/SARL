@@ -1,0 +1,44 @@
+mission SAR_RapidScan:
+
+  # 1. CONFIGURACIÓN INICIAL
+  setObjective("locate_person")
+  setHome(0, 0, 0)
+  setAltitude(15)
+  setSpeed(3)
+
+  # 2. DEFINICIÓN DEL ÁREA A PARTIR DE PUNTOS
+  let area1 = AREA_FROM_POINTS(
+    10, 10,
+    120, 10,
+    120, 80,
+    10, 80
+  )
+  defineArea(area1)
+
+  # 3. VARIABLES DE ESTADO
+  let attempts = 0
+  let maxAttempts = 1        # en modo rápido normalmente una sola pasada
+
+  # 4. BÚSQUEDA PRINCIPAL (recorrido continuo)
+  while attempts < maxAttempts:
+
+    let step = nextPatternStep("grid", area1)
+
+    while step != null:
+
+      # volamos el siguiente tramo del patrón
+      followStep(step)
+
+      # si hay detección, solo la registramos: no nos detenemos
+      if lastDetection.exists:
+        recordDetection(lastDetection)   # la lógica de almacenamiento está en Java
+
+      # siguiente paso del patrón
+      step = nextPatternStep("grid", area1)
+
+    attempts = attempts + 1
+
+  # 5. FIN DE MISIÓN: enviamos el resumen de detecciones
+  sendDetectionsSummary()    # lista ordenada por confianza, coords, etc.
+  returnHome()
+  land()

@@ -14,7 +14,7 @@ command
   | GOTO '(' INT ',' INT ')'
   ;
 
-// ---------- LÉXICO ----------
+// LÉXICO 
 TAKEOFF : 'takeoff' ;
 LAND    : 'land' ;
 GOTO    : 'goto' ;

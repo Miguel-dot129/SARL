@@ -20,14 +20,23 @@
     </properties>
     
     <dependencies>
-        <!-- ANTLR runtime -->
+        <!-- 
+             ANTLR4 Runtime: proporciona las clases necesarias para ejecutar 
+             el parser y el lexer generados a partir de tus gramáticas SARL. 
+             Es obligatorio para que el intérprete pueda procesar cualquier script.
+        -->
         <dependency>
             <groupId>org.antlr</groupId>
             <artifactId>antlr4-runtime</artifactId>
             <version>${antlr4.version}</version>
         </dependency>
         
-        <!-- Webots Java controller (ruta local en tu instalación) -->
+        <!-- 
+             Webots Controller API: librería oficial que expone todas las clases 
+             Java del simulador (Robot, Motor, GPS, IMU, Gyro...). 
+             Se usa con "scope=system" ya que Webots no publica esta dependencia 
+             en Maven Central y debe cargarse desde la instalación local.
+        -->
         <dependency>
             <groupId>com.cyberbotics</groupId>
             <artifactId>webots-controller</artifactId>
@@ -39,7 +48,16 @@
     
     <build>
         <plugins>
-            <!-- ANTLR4 plugin -->
+            <!-- 
+                 ANTLR4 Plugin:
+                 Este plugin genera automáticamente el parser y el lexer a partir 
+                 de las gramáticas en /grammar. 
+                 Los archivos generados se colocan en /src/main/java/es/upm/sarl/gen.
+                 
+                 Configuración:
+                 - visitor=true  -> activa el patrón Visitor (más flexible para interpretar SARL).
+                 - listener=false -> desactiva los listeners porque no se necesitan.
+            -->
             <plugin>
                 <groupId>org.antlr</groupId>
                 <artifactId>antlr4-maven-plugin</artifactId>
@@ -59,7 +77,11 @@
                 </executions>
             </plugin>
             
-            <!-- Compiler plugin -->
+            <!-- 
+                 Maven Compiler Plugin:
+                 Fuerza al proyecto a compilar siempre con Java 21 
+                 (mismo nivel de bytecode, evita incompatibilidades de versión).
+            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

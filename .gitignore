@@ -22,3 +22,5 @@ controllers/*/*.pyc
 dependency-reduced-pom.xml
 .mvn/
 .settings/
+
+src/main/java/es/ump/sarl/gen

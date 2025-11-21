@@ -1,10 +1,18 @@
 package es.upm.sarl.controller;
 
-import com.cyberbotics.webots.controller.*;
-import java.io.*;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.util.Locale;
 
-public class ExternalMavic {
+import com.cyberbotics.webots.controller.GPS;
+import com.cyberbotics.webots.controller.Gyro;
+import com.cyberbotics.webots.controller.InertialUnit;
+import com.cyberbotics.webots.controller.LED;
+import com.cyberbotics.webots.controller.Motor;
+import com.cyberbotics.webots.controller.Robot;
+
+public class Controlador_ejemplo_no_operativo_2 {
 
   private final Robot robot;
   private final int step;
@@ -25,19 +33,16 @@ public class ExternalMavic {
   private static final double K_ROLL_P           = 50.0;
   private static final double K_PITCH_P          = 30.0;
 
-  // NEW: pequeñas ganancias adicionales
-  private static final double K_YAW_D     = 2.0;
+
   private static final double K_ZI        = 0.6;
-  private static final double ZI_LIM      = 8.0;
-  private static final double K_XY_HOLD   = 0.15;
 
   // --- Hold XY (PI en marco del dron) y yaw lock ---
   private static final double K_XY_P = 0.4;
   private static final double K_XY_I = 0.020;
   private static final double K_XY_D = 0.35;   // nuevo: amortiguamiento lateral
   private static final double XY_I_LIM = 0.6;
-  private static final int PITCH_SIGN = -1;    // cambia a -1 si empuja al revés
-  private static final int ROLL_SIGN  = -1;    // cambia a -1 si empuja al revés
+  private static final int PITCH_SIGN = -1;    // si ves que va al revés, cámbialo a +1
+  private static final int ROLL_SIGN  = -1;
   private double ix = 0.0, iy = 0.0;
 
   // — XY hold refinado —
@@ -54,24 +59,30 @@ public class ExternalMavic {
   // --- Altitude hold helpers ---
   private double lastZ = 0.0, lastT = 0.0, vz = 0.0;
   private static final double VZ_ALPHA = 0.25;
-  private static final double KZ_D = 4.5; // más amortiguación vertical
-  private static final double KZ_I = 0.6;
+  private static final double KZ_D = 4.5;
   private double hoverTrim = K_VERTICAL_THRUST;
 
   // Objetivo de altura
   private double targetAltitude = 1.2;
 
-  // NEW: referencias de posición y estimación vz
+  // referencias de posición
   private double xRef=0, yRef=0;
   private double iz=0;
-  private double lastX = 0.0, lastY = 0.0;   // para estimar vx, vy
+  private double lastX = 0.0, lastY = 0.0;
 
-  // === LOG ===
+  // LOG
   private PrintWriter log = null;
   private int LOG_EVERY_N = 4;
   private int logTick = 0;
 
-  public ExternalMavic() {
+  // perturbaciones manuales (las dejamos por si quieres probar)
+  private double manualPitchDist = 0.0;
+  private double manualRollDist  = 0.0;
+
+  // demo
+  private int phase = 0;
+
+  public Controlador_ejemplo_no_operativo_2() {
     robot = new Robot();
     step  = Math.max(16, (int)Math.round(robot.getBasicTimeStep()));
 
@@ -120,6 +131,26 @@ public class ExternalMavic {
     double[] a0 = imu.getRollPitchYaw();
     yawRef = a0[2];
     ix = iy = 0.0;
+  }
+
+  public void setTargetAltitude(double zMeters) {
+    this.targetAltitude = zMeters;
+  }
+
+  public void setManualPitchDist(double d) {
+    this.manualPitchDist = d;
+  }
+
+  public void setManualRollDist(double d) {
+    this.manualRollDist = d;
+  }
+
+  // “go to y quédate”
+  public void setTargetXY(double x, double y) {
+    this.xRef = x;
+    this.yRef = y;
+    this.ix = 0.0;
+    this.iy = 0.0;
   }
 
   private void setMotorVelocities(double fl_in, double fr_in, double rl_in, double rr_in) {
@@ -174,7 +205,7 @@ public class ExternalMavic {
 
         double dt = Math.max(1e-3, robot.getBasicTimeStep() / 1000.0);
 
-        // --- Hold XY en marco del dron, con D por velocidad y escalado seguro ---
+        // --- Hold XY ---
         double ex = xRef - x;
         double ey = yRef - y;
         if (Math.abs(ex) < XY_DEADBAND) ex = 0.0;
@@ -190,17 +221,30 @@ public class ExternalMavic {
         double vx_b =  cy*vx + sy*vy;
         double vy_b = -sy*vx + cy*vy;
 
-        ix = clamp(ix + ex_b * dt, -XY_I_LIM, XY_I_LIM);
-        iy = clamp(iy + ey_b * dt, -XY_I_LIM, XY_I_LIM);
+        //  distancia al objetivo en XY
+        double distXY = Math.sqrt(ex*ex + ey*ey);
+
+        if (distXY < 0.25 && Math.abs(vx) < 0.05 && Math.abs(vy) < 0.05) {
+        } else {
+          ix = clamp(ix + ex_b * dt, -XY_I_LIM, XY_I_LIM);
+          iy = clamp(iy + ey_b * dt, -XY_I_LIM, XY_I_LIM);
+        }
 
         double pitchDist = PITCH_SIGN * (K_XY_P * ex_b + K_XY_I * ix - K_XY_D * vx_b);
         double rollDist  = ROLL_SIGN  * (-K_XY_P * ey_b - K_XY_I * iy + K_XY_D * vy_b);
+
+        // si estás dentro de 1 m, mueve menos (bajas la "velocidad")
+        if (distXY < 1.0) {
+          double scale = Math.max(0.25, distXY / 1.0); 
+          pitchDist *= scale;
+          rollDist  *= scale;
+        }
 
         pitchDist = clamp(pitchDist, -XY_DIST_LIM, XY_DIST_LIM);
         rollDist  = clamp(rollDist,  -XY_DIST_LIM, XY_DIST_LIM);
 
         boolean xyHoldEnabled = (alt >= ALT_MIN_FOR_XY);
-        double scaleXY = xyHoldEnabled ? 1.0 : 0.0; // se ajusta más abajo
+        double scaleXY = xyHoldEnabled ? 1.0 : 0.0;
 
         double eyaw = wrapPI(yawRef - yaw);
         double yawInput = clamp(K_YAW_P * eyaw - K_YAW_D_PD * yawRate, -U_YAW_LIM, U_YAW_LIM);
@@ -212,11 +256,10 @@ public class ExternalMavic {
         double verticalD = -KZ_D * vz;
         double verticalInput = verticalP + verticalD;
 
-        hoverTrim += KZ_I * clamp(ez, -0.3, 0.3) * dt;
+        hoverTrim += K_ZI * clamp(ez, -0.3, 0.3) * dt;
         hoverTrim = clamp(hoverTrim, 50.0, 150.0);
         verticalInput += K_ZI * iz - 0.8 * vz;
 
-        // --- Compensación por inclinación y escalado final de XY ---
         double tiltComp = 1.0 / Math.max(0.7, Math.cos(roll) * Math.cos(pitch));
         double thrustBase = (hoverTrim + verticalInput) * tiltComp;
 
@@ -227,7 +270,10 @@ public class ExternalMavic {
         double rollInputScaled  = K_ROLL_P  * clamp(roll,  -1.0, 1.0) + rollRate  + rollDist  * scaleXY;
         double pitchInputScaled = K_PITCH_P * clamp(pitch, -1.0, 1.0) + pitchRate + pitchDist * scaleXY;
 
-        // --- Mixer ---
+        // perturbaciones manuales
+        pitchInputScaled += this.manualPitchDist;
+        rollInputScaled  += this.manualRollDist;
+
         double inFL = thrustBase - rollInputScaled + pitchInputScaled - yawInput;
         double inFR = thrustBase + rollInputScaled + pitchInputScaled + yawInput;
         double inRL = thrustBase - rollInputScaled - pitchInputScaled + yawInput;
@@ -239,8 +285,21 @@ public class ExternalMavic {
         inRR = clamp(inRR, 0.0, 200.0);
 
         setMotorVelocities(inFL, inFR, inRL, inRR);
-        lastX = x; 
+        lastX = x;
         lastY = y;
+
+        // DEMO POR FASES CONTROLADA
+        if (phase == 0 && time > 10.0) {
+          setTargetAltitude(2.0);
+          System.out.println("[DEMO] Phase 1 -> targetAltitude = 2.0 m");
+          phase = 1;
+        } else if (phase == 1 && time > 20.0) {
+          double targetX = x + 15.0;
+          double targetY = y + 10.0;
+          setTargetXY(targetX, targetY);
+          System.out.printf("[DEMO] Phase 2 -> go to (%.2f, %.2f)%n", targetX, targetY);
+          phase = 2;
+        }
 
         if (log != null && (logTick++ % LOG_EVERY_N == 0)) {
           log.printf(Locale.US,
@@ -259,5 +318,5 @@ public class ExternalMavic {
     }
   }
 
-  public static void main(String[] args) { new ExternalMavic().run(); }
+  public static void main(String[] args) { new Controlador_ejemplo_no_operativo_2().run(); }
 }

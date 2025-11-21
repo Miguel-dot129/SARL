@@ -1,0 +1,140 @@
+mission SAR_Demo:
+
+  # MODO HÍBRIDO:
+  # - intenta confirmar enseguida las detecciones de alta confianza
+  # - registra TODAS las detecciones no confirmadas
+  # - al final, revisa la lista de detecciones grabadas
+
+  # 1. CONFIGURACIÓN INICIAL
+  setObjective("locate_person")
+  setHome(0, 0, 0)
+  setAltitude(10)
+
+  # 2. DEFINICIÓN DEL ÁREA DE BÚSQUEDA
+  # Java decidirá el tipo de área (rectángulo, caja orientada, etc.)
+  let area1 = AREA_FROM_POINTS(
+    10, 10,
+    120, 10,
+    120, 80,
+    10, 80
+  )
+  defineArea(area1)
+
+  # 3. VARIABLES DE ESTADO
+  let found = false
+  let attempts = 0
+  let maxAttempts = 3
+
+  # thresholds de confianza (IA)
+  let HIGH_CONF = 0.75
+  let LOW_CONF  = 0.40      # umbral mínimo para revisitar
+
+  # parámetros de confirmación por muestras
+  let NUM_SAMPLES   = 10    # nº de lecturas de confianza
+  let CONFIRM_RATIO = 0.8   # % mínimo de lecturas por encima de HIGH_CONF
+
+  # 4. BÚSQUEDA PRINCIPAL (barrido híbrido)
+  while (not found) and (attempts < maxAttempts):
+
+    # pedimos al controlador el siguiente punto del patrón
+    let step = nextPatternStep("grid", area1)
+
+    # mientras queden pasos en este patrón
+    while (step != null) and (not found):
+
+      # volamos ese paso
+      followStep(step)
+
+      # justo DESPUÉS de volar el paso, miramos si ha aparecido una detección
+      if lastDetection.exists:
+
+        # 4.1 detección de confianza ALTA -> intentamos confirmarla YA
+        if lastDetection.conf >= HIGH_CONF:
+          gotoDetection()
+          hold(2)
+
+          # confirmación por muestras sobre el objetivo
+          let samples   = 0
+          let highCount = 0
+          let confirmed = false
+
+          while samples < NUM_SAMPLES: # Habra bucles como este que podriamos plantear desarrollarlos en java su logica y no aqui
+            let currentConf = getDetectionConfidence()
+            if currentConf >= HIGH_CONF:
+              highCount = highCount + 1
+            samples = samples + 1
+            hold(1)
+
+          if highCount >= NUM_SAMPLES * CONFIRM_RATIO:
+            confirmed = true
+
+          if confirmed:
+            found = true
+            report("target confirmed (high confidence during pattern)")
+            recordDetection(lastDetection)
+            returnHome()
+            land()
+          else:
+            # no se confirmó: la guardamos como detección no confirmada
+            recordDetection(lastDetection)
+            resumePattern()
+
+        # 4.2 detección de confianza MEDIA/BAJA -> solo registrar
+        else:
+          # no paramos: solo guardamos la detección para posterior análisis
+          recordDetection(lastDetection)
+          # y seguimos con el barrido sin interrumpir
+
+      # pedimos el siguiente paso del patrón
+      step = nextPatternStep("grid", area1)
+
+    if not found:
+      attempts = attempts + 1
+
+  # 5. SEGUNDA FASE: REVISAR DETECCIONES REGISTRADAS
+  # (solo si el barrido no ha conseguido confirmar nada)
+  if not found:
+
+    resetRecordedDetectionsIterator()
+    # empezamos revisando solo detecciones con confianza >= LOW_CONF por ejemplo
+    let det = nextRecordedDetection(LOW_CONF)
+
+    while (det != null) and (not found):
+
+      gotoPosition(det.position)
+      hold(2)
+
+      # confirmación por muestras sobre la detección revisitada
+      let samples   = 0
+      let highCount = 0
+      let confirmed = false
+
+      while samples < NUM_SAMPLES:
+        let currentConf = getDetectionConfidence()
+        if currentConf >= HIGH_CONF:
+          highCount = highCount + 1
+        samples = samples + 1
+        hold(1)
+
+      if highCount >= NUM_SAMPLES * CONFIRM_RATIO:
+        confirmed = true
+
+      if confirmed:
+        found = true
+        report("target confirmed while revisiting detections (hybrid mode)")
+        returnHome()
+        land()
+      else:
+        # pasamos a la siguiente detección registrada
+        det = nextRecordedDetection(LOW_CONF)
+
+  # 6. si después de los intentos y revisitas no hay nada
+  if not found:
+    report("no target found in area (hybrid mode)")
+    returnHome()
+    land()
+
+    # NOTA: Este diseño asume detecciones tras cada paso. Una mejora futura sería detectar y actuar incluso mientras se vuela entre pasos consecutivos, sin esperar a llegar al siguiente punto del patrón. Esto permitiría responder más rápido a detecciones emergentes durante el trayecto (ej. entre (2,2) y (5,5) aparece una deteccion en (4.5, 4.0))
+
+
+
