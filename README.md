@@ -1,7 +1,7 @@
 # SARL
 **Raíz del Proyecto**
 
-Este repositorio está organizado para facilitar la lectura, pruebas y revisión del trabajo de definición de un lenguaje de alto nivel para misiones de drones SAR (Search and Rescue) usando ANTLR, con integración futura en Webots. A continuación se describe la estructura del proyecto.
+Este repositorio está organizado para facilitar la lectura, pruebas y revisión del trabajo de definición de un lenguaje de alto nivel turing completo para misiones de drones SAR (Search and Rescue) usando ANTLR, con integración futura en Webots. A continuación se describe la estructura del proyecto.
 
 ---
 
