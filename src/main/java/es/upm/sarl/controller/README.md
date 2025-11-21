@@ -32,10 +32,10 @@ Cada uno de estos lazos se ejecuta secuencialmente en el método `run()`, que re
 
 ## Situación Actual
 
-* **Control de Altitud** (✔): Implementado con PID completo (P, I, D). Utiliza medidas de altura del GPS para mantener la altitud deseada (`targetAltZ`).
-* **Control Horizontal** (✔): PD que convierte errores en X/Y a inclinaciones deseadas. Aún no incluye término integral.
-* **Control de Actitud** (✔): PD que estabiliza rápidamente el dron hacia `rollRef` y `pitchRef`, usando medidas angulares y derivadas desde IMU y giroscopio.
-* **Control de Yaw** (⚠): Implementado como PD, pero **todavía no es funcional para cambiar la orientación (yawRef)** sin comprometer la estabilidad. El cambio de rumbo necesita ser reestructurado.
+* **Control de Altitud**: Implementado con PID completo (P, I, D). Utiliza medidas de altura del GPS para mantener la altitud deseada (`targetAltZ`).
+* **Control Horizontal**: PD que convierte errores en X/Y a inclinaciones deseadas. Aún no incluye término integral.
+* **Control de Actitud**: PD que estabiliza rápidamente el dron hacia `rollRef` y `pitchRef`, usando medidas angulares y derivadas desde IMU y giroscopio.
+* **Control de Yaw**: Implementado como PD, pero **todavía no es funcional para cambiar la orientación (yawRef)** sin comprometer la estabilidad. El cambio de rumbo necesita ser reestructurado.
 
 ---
 
