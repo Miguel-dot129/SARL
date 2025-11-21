@@ -8,7 +8,7 @@ Este directorio contiene el controlador actual en Java que se utilizará junto c
 
 El archivo principal es `Controlador.java`, que implementa un sistema de **control PID en cascada** para regular la posición y orientación del dron en el entorno simulado. Este controlador está en desarrollo activo y se encuentra en fase de ajustes y mejoras.
 
-Otros archivos en esta carpeta (`ControladorV1.java`, `ControladorV1_alt.java`) son versiones experimentales previas y se mantienen por motivos de referencia histórica. No deben utilizarse.
+Otros archivos en esta carpeta (`Controlador_ejemplo_no_operativo.java`, `Controlador_ejemplo_no_operativo_2.java`) son versiones experimentales previas y se mantienen por motivos de referencia histórica. No deben utilizarse.
 
 ---
 
