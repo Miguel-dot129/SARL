@@ -1,4 +1,4 @@
-**README.md - Controlador Java para el Dron SAR (Webots)**
+# Controlador Java para el Dron Maveric 2 Pro (Webots)
 
 Este directorio contiene el controlador actual en Java que se utilizará junto con Webots para el control de un cuadricóptero en misiones de búsqueda y rescate (SAR).
 
