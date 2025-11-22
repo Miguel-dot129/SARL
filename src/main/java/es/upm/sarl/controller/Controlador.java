@@ -79,7 +79,7 @@ public class Controlador {
 
     // Límite de inclinación máxima permitida (en radianes) para pitch y roll. Ajustado a mano
     // evita órdenes de inclinación demasiado agresivas que podrían desestabilizar el dron
-    // 0.12 rad ≈ 6.9°: valor conservador para mantener estabilidad en vuelos suaves
+    // 0.12 rad aprox 7°: valor conservador para mantener estabilidad y vuelos suaves
     private static final double MAX_TILT_RAD = 0.12;
 
     // referencias de ángulo que usará el controlador de actitud
@@ -95,8 +95,11 @@ public class Controlador {
 
     public Controlador() {//constructor
         robot = new Robot();
+
         timeStep = (int) Math.round(robot.getBasicTimeStep());//Así uso el basicTimeStep del mundo
+
         initDevices();//método para iniciar sensores y actuadores (devices)
+
         // Empezamos asumiendo que este throttle mantiene más o menos el hover
         baseThrottle = HOVER_THROTTLE; //de inicio se le da la velocidad estable
         try { //inicializa los logs(para el csv)
@@ -322,7 +325,7 @@ public class Controlador {
         double x = pos[0];
         double y = pos[1];
 
-        double dt = timeStep / 1000.0;
+        double dt = timeStep / 1000.0; //misma explicación que método anterior
 
         // Errores de posición (positivos si estamos "por detrás" o "por debajo" del objetivo)
         double errorX = targetX - x; 
@@ -338,24 +341,23 @@ public class Controlador {
 
         // PD de posición en X e Y: calcula cuánto inclinar el dron en pitch (uX) y roll (uY) según la distancia y velocidad hacia el objetivo
         // Mapeo:
-        // uX: error en X -> inclinación "hacia delante/atrás" → pitchRef
-        // uY: error en Y -> inclinación "a la izquierda/derecha" → rollRef
+        // uX: error en X -> inclinación "hacia delante/atrás" 
+        // uY: error en Y -> inclinación "a la izquierda/derecha" 
         double uX = POS_KP * errorX + POS_KD * dErrorX;
         double uY = POS_KP * errorY + POS_KD * dErrorY;
         
-        // Se limita la inclinación deseada (en radianes) para evitar que el dron se incline más allá de lo seguro: máx. ±7° (~0.12 rad)
-        // pitchRef: inclinación hacia adelante o atrás (para moverse en X)
-        // rollRef: inclinación hacia izquierda o derecha (para moverse en Y), con signo invertido
+        // Se limita la inclinación deseada (en radianes) para evitar que el dron se incline más allá de lo seguro: máx. ±7° (aprox 0.12 rad)
+        // pitchRef: inclinación hacia adelante o atrás (para moverse en X) tras clamp
+        // rollRef: inclinación hacia izquierda o derecha (para moverse en Y) tras clamp, con signo invertido tras pruebas
         pitchRef = clamp(uX, -MAX_TILT_RAD, MAX_TILT_RAD);
         rollRef  = clamp(-uY, -MAX_TILT_RAD, MAX_TILT_RAD);
 
     }
 
     /**
-     * PD de yaw.
-     * Devuelve un "torque" yawU que hay que sumar/restar a los motores
-     * para girar el dron hacia yawRef.
-     */
+     * PD de yaw. NO TERMINADO, DE MOMENTO FALLA AL CAMBIAR EL YAW, SE MANTIENE EN 0 PORQUE ASÍ NO AFECTA AL RESTO DE PIDs
+     * Devuelve un "torque" yawU que hay que sumar/restar a los motores para girar el dron hacia yawRef
+     *      */
     private double PDYawControl() {
         double[] rpy = imu.getRollPitchYaw();
         double yaw = rpy[2];
@@ -366,7 +368,7 @@ public class Controlador {
         while (error > Math.PI)  error -= 2.0 * Math.PI;
         while (error < -Math.PI) error += 2.0 * Math.PI;
 
-        // derivada: usar gyro en Z (wz ~ yawRate)
+        // derivada: se usa gyro en Z (wz ~ yawRate)
         double[] g = gyro.getValues();
         double yawRate = g[2];
 
@@ -376,10 +378,30 @@ public class Controlador {
         return u;
     }
 
+    /**
+     * Guarda en un archivo CSV el estado actual del dron para análisis posterior.
+     *
+     * Este método se llama en cada ciclo de simulación y registra:
+     * - El tiempo transcurrido desde el inicio (t)
+     * - Posición actual del dron (x, y, z) obtenida por el GPS
+     * - Orientación del dron (roll, pitch, yaw) obtenida por la IMU
+     * - Referencias de actitud calculadas (rollRef y pitchRef)
+     * - Potencia base calculada para las hélices (baseThrottle)
+     * - Errores actuales en la posición horizontal (errorX, errorY)
+     * - Integral acumulada del error de altitud (altIntegral)
+     * - Referencia de orientación (yawRef)
+     *
+     * Esta información se escribe como una línea en el fichero CSV de logs
+     * (`drone_log.csv`), lo que permite luego analizar el comportamiento del dron
+     * y evaluar el rendimiento de los controladores PID durante la misión.
+     */
     private void logState(int stepCount) {
-        if (logWriter == null) return;
 
+        // Calcula el tiempo simulado en segundos desde que se inició el controlador,
+        // multiplicando el número de pasos de simulación por la duración de cada paso (en ms),
+        // y dividiendo entre 1000 para pasarlo a segundos
         double t = stepCount * timeStep / 1000.0;
+
         double[] pos = gps.getValues();
         double[] rpy = imu.getRollPitchYaw();
 
@@ -405,32 +427,24 @@ public class Controlador {
             yawRef
         );
 
+        // Fuerza el volcado del buffer al archivo
         logWriter.flush();
 }
-
 
     /*METODOS DE ALTO NIVEL*/
 
     /**
-     * Fija una orientación absoluta en yaw (radianes)
-     */
-    public void setYaw(double newYaw) {
-        this.yawRef = newYaw;
-        System.out.printf("CMD  | setYaw(%.3f)%n", yawRef);
-    }
-
-    /**
-     * Fija como objetivo la posición y orientación actuales.
+     * Fija como objetivo la posición y orientación actuales
      * Efecto: el dron tenderá a quedarse "como está" (hover aquí).
      */
     public void hoverHere() {
         double[] pos = gps.getValues();
         double[] rpy = imu.getRollPitchYaw();
 
-        targetX   = pos[0];
-        targetY   = pos[1];
+        targetX = pos[0];
+        targetY = pos[1];
         targetAltZ = pos[2];
-        yawRef    = rpy[2];
+        yawRef = rpy[2];
 
         System.out.printf(
             "CMD  | hoverHere() -> targetX=%.3f targetY=%.3f targetZ=%.3f yawRef=%.3f%n",
@@ -447,18 +461,26 @@ public class Controlador {
     }
 
     /**
-     * Ordena volar hasta el punto (x, y, z) en coordenadas del mundo.
-     * El yawRef actual se mantiene.
+     * Ordena volar hasta el punto (x, y, z) en coordenadas del mundo
+     * El yawRef actual se mantiene (0)
      */
     public void moveTo(double x, double y, double z) {
-        targetX    = x;
-        targetY    = y;
+        targetX = x;
+        targetY = y;
         targetAltZ = z;
 
         System.out.printf(
             "CMD  | moveTo(%.3f, %.3f, %.3f) -> nuevo objetivo%n",
             x, y, z
         );
+    }
+
+    /**
+     * Fija una orientación absoluta en yaw (radianes)
+     */
+    public void setYaw(double newYaw) {
+        this.yawRef = newYaw;
+        System.out.printf("CMD  | setYaw(%.3f)%n", yawRef);
     }
 
     public void run() {
@@ -486,31 +508,30 @@ public class Controlador {
     }
  
     public static void main(String[] args) {
-        Controlador c = new Controlador();//instanciamos controlador
+        Controlador c = new Controlador(); //instanciamos controlador
 
         // Hilo que corre el bucle de control continuo
         Thread controlThread = new Thread(() -> {
-            c.run();   // este es tu while(robot.step(...)) de siempre
+            c.run();   // este es tu while(robot.step(...)) 
         });
         controlThread.start();
 
         try {
-            // Espera 2 segundos para que despegue y estabilice un poco
+
+            //Aqui podemos jugar con el dron como queramos añadiendo temporizadores y llamando a los metodos de alto nivel
+
             Thread.sleep(6000);
             //c.hoverHere();  // fijar hover en el punto inicial
 
-            c.moveTo(5.0, 5.0, 3);  // ir a (5,5,1.5)
-            Thread.sleep(20000);
-
-            // Espera 5 segundos
+            c.moveTo(5.0, 5.0, 3);  // ir a (5,5,3)
+            Thread.sleep(20000);  //espera 20 segundos
             
-            c.moveTo(-10.0, -5.0, 3.0);  
-            Thread.sleep(60000);
+            c.moveTo(-10.0, -5.0, 3.0);  // ir a (-10,-5,3)
+            Thread.sleep(20000);  //espera 20 segundos
 
-            c.changeAltitude(3.0);    // subir a z = 3.0
-            Thread.sleep(3000);
+            c.changeAltitude(5.0);  // subir a z = 5.0
 
-            //c.setYaw(Math.PI / 2.0);  // girar 90 grados
+            //c.setYaw(Math.PI / 2.0);  // girar 90 grados, pero no funciona de momento, desestabiliza al dron
 
         } catch (InterruptedException e) {
             e.printStackTrace();
