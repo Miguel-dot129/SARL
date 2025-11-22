@@ -11,7 +11,6 @@ Este repositorio está organizado para facilitar la lectura, pruebas y revisión
 /
 |-- grammar/             # Futuros ficheros .g4 de ANTLR para definir la gramática del lenguaje
 |-- examples/            # Archivos .sarl de ejemplo para imaginar misiones escritas con el lenguaje deseado
-|   |-- README.md        # Explica el uso imaginativo y no definitivo de los archivos SARL
 |-- controller/          # Implementación del controlador en Java para Webots, dentro de la carpeta \src\main\java\es\upm\sarl\
 |   |-- Controlador.java      # Versión funcional actual del controlador para Webots
 |   |-- Controlador_ejemplo_no_operativo.java       # Versión experimental anterior (descartada)
