@@ -119,7 +119,7 @@ public class Controlador {
 
     private void initDevices() {
         gps = (GPS) robot.getDevice("gps");//da la xyz (posicion) del dron
-        gps.enable(timeStep);
+        gps.enable(timeStep);//se inicializan indicando cada cuanto tiempo quieres recibir nuevas lecturas
 
         imu = (InertialUnit) robot.getDevice("inertial unit");//da el angulo absoluto del dron respecto al mundo        
         imu.enable(timeStep);
@@ -327,7 +327,7 @@ public class Controlador {
 
         double dt = timeStep / 1000.0; //misma explicación que método anterior
 
-        // Errores de posición (positivos si estamos "por detrás" o "por debajo" del objetivo)
+        // Errores de posición (positivos si estamos "por detrás" o "a un lado" del objetivo)
         double errorX = targetX - x; 
         double errorY = targetY - y; 
 

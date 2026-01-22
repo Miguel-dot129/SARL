@@ -1,0 +1,5 @@
+mission Demo;
+setHome(0,0,0);
+setAltitude(10);
+report("ok");
+land();

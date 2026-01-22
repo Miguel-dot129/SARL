@@ -1,0 +1,13 @@
+mission Demo;
+
+let alt = 10;
+setAltitude(alt);
+
+let x = 5 + 2 * 3;
+report("x="); 
+report(x);
+
+alt = alt + 5;
+setAltitude(alt);
+
+land();

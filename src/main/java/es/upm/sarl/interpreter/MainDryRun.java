@@ -1,10 +1,24 @@
 package es.upm.sarl.interpreter;
 
-import es.upm.sarl.adapter.ConsoleAdapter;
+import es.upm.sarl.gen.SARLLexer;
+import es.upm.sarl.gen.SARLParser;
+import org.antlr.v4.runtime.CharStreams;
+import org.antlr.v4.runtime.CommonTokenStream;
 
 public class MainDryRun {
+
     public static void main(String[] args) throws Exception {
-        Runner.runScript("examples/hello_world.sarl", new ConsoleAdapter());
+
+        String file = "examples/01_variables.sarl";
+
+        var input = CharStreams.fromFileName(file);
+        var lexer = new SARLLexer(input);
+        var tokens = new CommonTokenStream(lexer);
+        var parser = new SARLParser(tokens);
+
+        var tree = parser.program(); 
+
+        var interpreter = new Interpreter(null);
+        interpreter.visit(tree);
     }
 }
-
