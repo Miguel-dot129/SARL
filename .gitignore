@@ -1,4 +1,6 @@
+# =========================
 # Compilados y temporales
+# =========================
 target/
 *.class
 *.log
@@ -7,20 +9,37 @@ target/
 *.swp
 *.DS_Store
 
+# =========================
 # Webots
+# =========================
 controllers/*/*.exe
 controllers/*/*.class
 controllers/*/*.dll
 controllers/*/*.pyc
 
+# =========================
 # IntelliJ / VS Code
+# =========================
 .idea/
 .vscode/
 *.iml
 
+# =========================
 # Maven
+# =========================
 dependency-reduced-pom.xml
 .mvn/
 .settings/
 
-src/main/java/es/ump/sarl/gen
+# =========================
+# ANTLR (NO versionar código generado)
+# =========================
+grammar/.antlr/
+**/*.interp
+**/*.tokens
+
+# Código Java generado por ANTLR
+src/main/java/es/upm/sarl/gen/
+
+drone_log.csv
+
