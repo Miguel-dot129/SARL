@@ -51,9 +51,9 @@ public class Interpreter extends SARLBaseVisitor<Void> {
         // - si expr es "5 + 2*3" => evalExpr/Term/Factor aplican precedencia y devuelven el valor de la expr
         var values = exprArgs.stream()
                 .map(this::evalExpr)   // devuelve Object (Double o String por ahora)
-                .toList();
+                .toList(); //devuelve una lista de las expresiones ya evaluadas
         
-        // 3) también guardamos el texto original del argumento
+        // 3) también guardamos el texto original de los argumentos para imprimirlos por pantalla por ahora
         var rawTexts = exprArgs.stream()
                 .map(SARLParser.ExprContext::getText)
                 .toList();
@@ -64,7 +64,7 @@ public class Interpreter extends SARLBaseVisitor<Void> {
             if (i > 0) rendered.append(", ");
             rendered.append(rawTexts.get(i)).append("=").append(values.get(i));
         }
-        
+        //paso 4 es simplemente para imprimir por pantalla y probar el funcionamiento
         System.out.println("CALL: " + funcName + "(" + rendered + ")");
 
         return null;
@@ -107,6 +107,72 @@ public class Interpreter extends SARLBaseVisitor<Void> {
         variables.put(varName, value);
 
         System.out.println("ASSIGN: " + varName + " = " + value);
+        return null;
+    }
+
+    /**
+     * Ejecuta un bloque { stmt* } en orden.
+     * Un bloque no introduce (de momento) un nuevo ámbito de variables:
+     * la memoria de variables es global al programa
+     */
+    @Override
+    public Void visitBlock(SARLParser.BlockContext ctx) {
+        for (var stmt : ctx.stmt()) {
+            visit(stmt);
+        }
+        return null;
+    }
+
+    /**
+     * if (expr) { ... } else { ... }
+     * Semántica V2.0:
+     * - Evalúa expr (numérica)
+     * - Si expr != 0 ejecuta el primer bloque
+     * - Si expr == 0 y existe else, ejecuta el bloque else
+     */
+    @Override
+    public Void visitIfStmt(SARLParser.IfStmtContext ctx) {
+        Object condValue = evalExpr(ctx.expr());
+        boolean cond = isTruthy(condValue);
+
+        System.out.println("IF: condition=" + ctx.expr().getText() + " => " + condValue + " (" + cond + ")");
+
+        if (cond) {
+            visit(ctx.block(0));  // bloque del if
+        } else if (ctx.block().size() > 1) {
+            visit(ctx.block(1));  // bloque del else (si existe)
+        }
+
+        return null;
+    }
+
+    /**
+     * while (expr) { ... }
+     * Semántica V2.0:
+     * - Evalúa expr antes de cada iteración
+     * - Mientras expr != 0, ejecuta el bloque
+     *
+     * Nota: como el bloque puede modificar variables, la condición puede cambiar
+     */
+    @Override
+    public Void visitWhileStmt(SARLParser.WhileStmtContext ctx) {
+        int guard = 0; // protección simple ante bucles infinitos en dry-run 
+        while (true) {
+            Object condValue = evalExpr(ctx.expr());
+            boolean cond = isTruthy(condValue);
+
+            System.out.println("WHILE: condition=" + ctx.expr().getText() + " => " + condValue + " (" + cond + ")");
+
+            if (!cond) break;
+
+            visit(ctx.block());
+
+            // Evita colgarte en pruebas si te equivocas con el ejemplo
+            guard++;
+            if (guard > 10_000) {
+                throw new RuntimeException("Posible bucle infinito detectado (guard > 10000)");
+            }
+        }
         return null;
     }
 
@@ -213,5 +279,24 @@ public class Interpreter extends SARLBaseVisitor<Void> {
             default -> throw new RuntimeException("Operador desconocido: " + op);
         };
     }
+
+    /**
+     * Convierte un valor evaluado (por ahora numérico) a booleano.
+     * Regla temporal (V2.0):
+     * - 0 => false
+     * - cualquier otro número => true
+     *
+     * Más adelante (V2.x) se ampliará a booleanos reales y comparadores.
+     */
+    private boolean isTruthy(Object value) {
+        if (value == null) return false;
+
+        if (value instanceof Number n) {
+            return n.doubleValue() != 0.0;
+        }
+
+        throw new RuntimeException("Condición no soportada (se esperaba número): " + value);
+    }
+
 
 }

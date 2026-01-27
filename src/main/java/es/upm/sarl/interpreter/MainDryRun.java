@@ -9,7 +9,7 @@ public class MainDryRun {
 
     public static void main(String[] args) throws Exception {
 
-        String file = "examples/01_variables.sarl";
+        String file = "examples/03_control_flow_else.sarl";
 
         var input = CharStreams.fromFileName(file);
         var lexer = new SARLLexer(input);
