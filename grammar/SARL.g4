@@ -75,6 +75,8 @@ factor
   | LPAREN expr RPAREN //agrupar entre parentesis (2+3)*5
   | NUMBER //literal numero
   | STRING //literal string
+  | TRUE
+  | FALSE
   | ID //variable
   ;   
 
@@ -92,7 +94,7 @@ block
 // Opcionalmente permite un bloque ELSE si la condición no se cumple.
 // De momento la condición es una expresión numérica (no booleana)
 ifStmt
-  : IF LPAREN expr RPAREN block (ELSE block)? 
+  : IF LPAREN condition RPAREN block (ELSE block)? 
   ;
 
 // ESTRUCTURA DE BUCLE WHILE:
@@ -100,9 +102,16 @@ ifStmt
 // Mientras la condición sea verdadera, se ejecuta el bloque asociado
 // En esta versión la condición es una expresión numérica
 whileStmt
-  : WHILE LPAREN expr RPAREN block
+  : WHILE LPAREN condition RPAREN block
   ;
 
+condition
+  : expr (compOp expr)?   // permite: (x) o (x > 0) o (x == y)
+  ;
+
+compOp
+  : LT | GT | LE | GE | EQ | NE
+  ;
 
 // LEXER (tokens)
 
@@ -112,6 +121,8 @@ LET     : 'let'; //declaracion de variables
 IF      : 'if'; //condicion if
 ELSE    : 'else'; //condicion si no se cumple if
 WHILE   : 'while'; //bucle
+TRUE  : 'true'; 
+FALSE : 'false';
 
 ID      : [a-zA-Z_][a-zA-Z_0-9]* ; //identificadores
 
@@ -133,6 +144,14 @@ PLUS    : '+' ;
 MINUS   : '-' ;
 STAR    : '*' ;
 SLASH   : '/' ;
+
+//comparadores
+LE : '<=' ; //less than or equal
+LT : '<' ; //less than
+GE : '>=' ; //greater than or equal
+GT : '>' ; // Greater than
+EQ : '==' ; //equal
+NE : '!=' ; //not equal
 
 
 WS      : [ \t\r\n]+ -> skip ; //ignorar espacios y saltos

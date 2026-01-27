@@ -1,0 +1,14 @@
+mission Demo;
+
+let x = 3;
+
+if (x > 0) {
+  takeOff();
+} else {
+  land();
+}
+
+while (x > 0) {
+  x = x - 1;
+  moveForward(x);
+}

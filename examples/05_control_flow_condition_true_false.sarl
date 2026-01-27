@@ -1,0 +1,15 @@
+mission Demo;
+
+let x = 1;
+
+if (x > 0) {
+  takeOff();
+}
+
+if (false) {
+  land();
+}
+
+if (true) {
+  goTo(x);
+}

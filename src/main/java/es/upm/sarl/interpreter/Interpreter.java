@@ -132,10 +132,9 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      */
     @Override
     public Void visitIfStmt(SARLParser.IfStmtContext ctx) {
-        Object condValue = evalExpr(ctx.expr());
-        boolean cond = isTruthy(condValue);
+        boolean cond = evalCondition(ctx.condition());
 
-        System.out.println("IF: condition=" + ctx.expr().getText() + " => " + condValue + " (" + cond + ")");
+        System.out.println("IF: condition=" + ctx.condition().getText() + " => " + cond);
 
         if (cond) {
             visit(ctx.block(0));  // bloque del if
@@ -158,10 +157,9 @@ public class Interpreter extends SARLBaseVisitor<Void> {
     public Void visitWhileStmt(SARLParser.WhileStmtContext ctx) {
         int guard = 0; // protección simple ante bucles infinitos en dry-run 
         while (true) {
-            Object condValue = evalExpr(ctx.expr());
-            boolean cond = isTruthy(condValue);
+            boolean cond = evalCondition(ctx.condition());
 
-            System.out.println("WHILE: condition=" + ctx.expr().getText() + " => " + condValue + " (" + cond + ")");
+            System.out.println("WHILE: condition=" + ctx.condition().getText() + " => " + cond);
 
             if (!cond) break;
 
@@ -256,8 +254,32 @@ public class Interpreter extends SARLBaseVisitor<Void> {
             return -((Number) value).doubleValue();
         }
 
+        if (ctx.TRUE() != null) {
+            return true;
+        }
+
+        if (ctx.FALSE() != null) {
+            return false;
+        }
+
         throw new RuntimeException("Factor no soportado");
     }
+
+    private boolean evalCondition(SARLParser.ConditionContext ctx) {
+        // caso 1: solo expr -> truthy numérico (mantienes compatibilidad)
+        if (ctx.compOp() == null) {
+            Object v = evalExpr(ctx.expr(0));
+            return isTruthy(v);
+        }
+
+        // caso 2: expr op expr -> comparación real -> boolean
+        Object left = evalExpr(ctx.expr(0));
+        Object right = evalExpr(ctx.expr(1));
+        String op = ctx.compOp().getText();
+
+        return applyComparison(left, right, op);
+    }
+
 
     /**
      * Aplica un operador binario aritmético.
@@ -291,12 +313,30 @@ public class Interpreter extends SARLBaseVisitor<Void> {
     private boolean isTruthy(Object value) {
         if (value == null) return false;
 
+        if (value instanceof Boolean b) return b;
+
         if (value instanceof Number n) {
             return n.doubleValue() != 0.0;
         }
 
         throw new RuntimeException("Condición no soportada (se esperaba número): " + value);
     }
+
+    private boolean applyComparison(Object a, Object b, String op) {
+        double x = ((Number) a).doubleValue();
+        double y = ((Number) b).doubleValue();
+
+        return switch (op) {
+            case "<"  -> x < y;
+            case "<=" -> x <= y;
+            case ">"  -> x > y;
+            case ">=" -> x >= y;
+            case "==" -> x == y;
+            case "!=" -> x != y;
+            default -> throw new RuntimeException("Operador de comparación desconocido: " + op);
+        };
+    }
+
 
 
 }
