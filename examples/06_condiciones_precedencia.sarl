@@ -1,0 +1,65 @@
+mission ConditionsPrecedence;
+
+let x = 1;
+let y = 0;
+let z = 1;
+
+# 1) Comparación simple
+if (x > 0) {
+  takeOff();
+} else {
+  land();
+}
+
+# 2) Aritmética dentro de comparación
+if (x + 8 < y + 9) {
+  moveForward(1);
+} else {
+  moveForward(0);
+}
+
+# 3) AND con dos comparaciones
+if (x > 0 and z == 1) {
+  moveForward(2);
+} else {
+  moveForward(3);
+}
+
+# 4) OR + AND (AND debe tener más precedencia)
+# Interpretación esperada: (x > 0) OR ((y > 0) AND (z > 0))
+if (x > 0 or y > 0 and z > 0) {
+  moveForward(4);
+} else {
+  moveForward(5);
+}
+
+# 5) Paréntesis forzando precedencia
+# Interpretación esperada: ((x > 0) OR (y > 0)) AND (z > 0)
+if ((x > 0 or y > 0) and z > 0) {
+  moveForward(6);
+} else {
+  moveForward(7);
+}
+
+# 6) NOT
+if (not (x > 0)) {
+  land();
+} else {
+  takeOff();
+}
+
+# 7) Booleanos puros
+if (true) {
+  moveForward(8);
+}
+
+while (false) {
+  moveForward(999);
+}
+
+# 8) NOT + AND/OR combinados
+if (not (x > 0) or (z > 0 and y == 0)) {
+  moveForward(9);
+} else {
+  moveForward(10);
+}

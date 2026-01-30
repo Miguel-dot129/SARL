@@ -124,11 +124,12 @@ public class Interpreter extends SARLBaseVisitor<Void> {
     }
 
     /**
-     * if (expr) { ... } else { ... }
-     * Semántica V2.0:
-     * - Evalúa expr (numérica)
-     * - Si expr != 0 ejecuta el primer bloque
-     * - Si expr == 0 y existe else, ejecuta el bloque else
+    * if (condition) { ... } else { ... }
+    * Evalúa una condición (numérica o booleana)
+    * - Si la condición es verdadera, ejecuta el bloque IF
+    * - Si es falsa y existe bloque ELSE, ejecuta el bloque ELSE
+    *
+    * La evaluación de la condición se delega a evalCondition()
      */
     @Override
     public Void visitIfStmt(SARLParser.IfStmtContext ctx) {
@@ -146,12 +147,12 @@ public class Interpreter extends SARLBaseVisitor<Void> {
     }
 
     /**
-     * while (expr) { ... }
+     * while (condition) { ... }
      * Semántica V2.0:
-     * - Evalúa expr antes de cada iteración
-     * - Mientras expr != 0, ejecuta el bloque
+     * - Evalúa una condicion antes de cada iteración
+     * - Mientras la condición sea verdadera, ejecuta el bloque
      *
-     * Nota: como el bloque puede modificar variables, la condición puede cambiar
+     * La condición puede cambiar durante la ejecución del bloque
      */
     @Override
     public Void visitWhileStmt(SARLParser.WhileStmtContext ctx) {
@@ -254,25 +255,120 @@ public class Interpreter extends SARLBaseVisitor<Void> {
             return -((Number) value).doubleValue();
         }
 
-        if (ctx.TRUE() != null) {
-            return true;
-        }
-
-        if (ctx.FALSE() != null) {
-            return false;
-        }
-
         throw new RuntimeException("Factor no soportado");
     }
 
+    /*
+    EVALUACIÓN DE CONDICIONES LÓGICAS (V2)
+    
+    Implementa la evaluación completa de expresiones booleanas
+    siguiendo la precedencia definida en la gramática:
+    
+        NOT  >  AND  >  OR
+    
+    La evaluación se realiza de forma recursiva sobre el AST
+    generado por ANTLR, respetando estrictamente la estructura
+    sintáctica del lenguaje
+    */
+
+    /**
+     * Evalúa una condición SARL
+     *
+     * Punto de entrada principal para la evaluación de condiciones
+     * en estructuras de control (if / while)
+     *
+     * La condición se delega al nivel OR, que representa el operador
+     * lógico de menor precedencia
+     */
     private boolean evalCondition(SARLParser.ConditionContext ctx) {
-        // caso 1: solo expr -> truthy numérico (mantienes compatibilidad)
-        if (ctx.compOp() == null) {
-            Object v = evalExpr(ctx.expr(0));
-            return isTruthy(v);
+        return evalCondOr(ctx.condOr());
+    }
+
+    /**
+     * Evalúa una expresión lógica OR
+     *
+     * Semántica:
+     * - Evalúa la primera subcondición
+     * - Si alguna de las condiciones AND evaluadas es verdadera,
+     *   el resultado final es true
+     *
+     * Representa el operador lógico de menor precedencia
+     */
+    private boolean evalCondOr(SARLParser.CondOrContext ctx) {
+        boolean result = evalCondAnd(ctx.condAnd(0));
+
+        for (int i = 1; i < ctx.condAnd().size(); i++) {
+            result = result || evalCondAnd(ctx.condAnd(i));
         }
 
-        // caso 2: expr op expr -> comparación real -> boolean
+        return result;
+    }
+
+    /**
+     * Evalúa una expresión lógica AND
+     *
+     * Semántica:
+     * - Todas las subcondiciones deben evaluarse como true
+     *   para que el resultado final sea true
+     *
+     * Tiene mayor precedencia que OR
+     */
+    private boolean evalCondAnd(SARLParser.CondAndContext ctx) {
+        boolean result = evalCondNot(ctx.condNot(0));
+
+        for (int i = 1; i < ctx.condNot().size(); i++) {
+            result = result && evalCondNot(ctx.condNot(i));
+        }
+
+        return result;
+    }
+
+    /**
+     * Evalúa el operador lógico NOT
+     *
+     * Semántica:
+     * - Si aparece el operador NOT, se invierte el resultado
+     *   de la subcondición asociada
+     *
+     * Es el operador lógico de mayor precedencia
+     */
+    private boolean evalCondNot(SARLParser.CondNotContext ctx) {
+        if (ctx.NOT() != null) {
+            return !evalCondNot(ctx.condNot());
+        }
+        return evalCondAtom(ctx.condAtom());
+    }
+
+    /**
+     * Evalúa un átomo de condición
+     *
+     * Un átomo puede ser:
+     * - un literal booleano (true / false)
+     * - una subcondición entre paréntesis
+     * - una comparación relacional entre expresiones
+     */
+    private boolean evalCondAtom(SARLParser.CondAtomContext ctx) {
+        if (ctx.TRUE() != null) return true;
+        if (ctx.FALSE() != null) return false;
+
+        if (ctx.condition() != null) {
+            return evalCondition(ctx.condition());
+        }
+
+        return evalComparison(ctx.comparison());
+    }
+
+    /**
+     * Evalúa una comparación relacional entre dos expresiones aritméticas
+     *
+     * Ejemplos soportados:
+     *   - x > 0
+     *   - a == b
+     *   - x + 8 < y + 9
+     *
+     * Siempre devuelve un valor booleano real
+     */
+    private boolean evalComparison(SARLParser.ComparisonContext ctx) {
         Object left = evalExpr(ctx.expr(0));
         Object right = evalExpr(ctx.expr(1));
         String op = ctx.compOp().getText();
@@ -280,15 +376,19 @@ public class Interpreter extends SARLBaseVisitor<Void> {
         return applyComparison(left, right, op);
     }
 
-
     /**
-     * Aplica un operador binario aritmético.
+     * Aplica un operador binario aritmético
      *
-     * Se asume (por ahora):
-     * - ambos operandos son numéricos
-     * - no hay comprobación de tipos avanzada 
+     * Reglas semánticas:
+     * - Los operadores + - * / solo aceptan operandos numéricos
+     * - El uso de valores booleanos produce un error semántico
      */
     private Object applyBinaryOp(Object a, Object b, String op) {
+
+        //Los operadores + - * / solo aceptan operandos numéricos
+        if (!(a instanceof Number) || !(b instanceof Number)) {
+            throw new RuntimeException("Operación aritmética solo permitida con números: "+ a + " " + op + " " + b);
+        }
 
         double x = ((Number) a).doubleValue();
         double y = ((Number) b).doubleValue();
@@ -303,26 +403,19 @@ public class Interpreter extends SARLBaseVisitor<Void> {
     }
 
     /**
-     * Convierte un valor evaluado (por ahora numérico) a booleano.
-     * Regla temporal (V2.0):
-     * - 0 => false
-     * - cualquier otro número => true
+     * Aplica un operador de comparación entre dos valores numéricos
      *
-     * Más adelante (V2.x) se ampliará a booleanos reales y comparadores.
+     * Reglas semánticas:
+     * - Solo se permiten comparaciones entre valores numéricos
+     * - El resultado es siempre un booleano real (true / false)
      */
-    private boolean isTruthy(Object value) {
-        if (value == null) return false;
-
-        if (value instanceof Boolean b) return b;
-
-        if (value instanceof Number n) {
-            return n.doubleValue() != 0.0;
-        }
-
-        throw new RuntimeException("Condición no soportada (se esperaba número): " + value);
-    }
-
     private boolean applyComparison(Object a, Object b, String op) {
+
+        //Los operadores < > <= >= solo aceptan operandos numéricos
+        //== y != pueden ampliarse más adelante, pero por ahora también numéricos
+        if (!(a instanceof Number) || !(b instanceof Number)) {
+            throw new RuntimeException("Comparación solo permitida entre valores numéricos");
+        }
         double x = ((Number) a).doubleValue();
         double y = ((Number) b).doubleValue();
 
