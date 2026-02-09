@@ -24,24 +24,18 @@ mission
 // En V2 se amplía para incluir estructuras de control (if / while)
 stmt 
   : callStmt//llamar a algo
-  | letStmt //variable
   | assignStmt //asignacion de variable
   | ifStmt //condicion (if)
   | whileStmt //bucle (while)
   ;
 
-//LLAMADA A FUNCION
-// por ejemplo setHome(0,0,0)
-callStmt 
-  : ID LPAREN argList? RPAREN SEMI //asrList? es una lista de argumentos opcional
+//LLAMADA A FUNCION (comando)
+// por ejemplo setHome 0, 0, 0;
+callStmt
+  : ID SEMI
+  | ID argList SEMI
   ;
 
-//DECLARACION DE VARIABLE: 
-// Permite introducir una nueva variable en el programa SARL
-// Sintaxis: let nombre = expresión;
-letStmt
-  : LET ID ASSIGN expr SEMI
-  ; 
 
 // ASIGNACION:
 // Modifica el valor de una variable previamente declarada.
@@ -97,14 +91,14 @@ block
 // ESTRUCTURA CONDICIONAL IF / ELSE:
 // Evalúa una condición booleana y ejecuta el bloque correspondiente.
 ifStmt
-  : IF LPAREN condition RPAREN block (ELSE block)? 
+  : IF condition block (ELSE block)? 
   ;
 
 // ESTRUCTURA DE BUCLE WHILE:
 // Evalúa repetidamente una condición booleana
 // Mientras la condición sea verdadera, ejecuta el bloque
 whileStmt
-  : WHILE LPAREN condition RPAREN block
+  : WHILE condition block
   ;
 
 // CONDICIÓN:
@@ -160,16 +154,15 @@ compOp
 // LEXER (tokens)
 
 //palabras reservadas:
-MISSION : 'mission'; //palabra reservada para nombre mision
-LET     : 'let'; //declaracion de variables
-IF      : 'if'; //condicion if
-ELSE    : 'else'; //condicion si no se cumple if
-WHILE   : 'while'; //bucle
-TRUE    : 'true'; //literal booleano verdadero 
-FALSE   : 'false'; //literal booleano falso 
-AND   : 'and';  
-OR    : 'or'; 
-NOT   : 'not';
+MISSION : 'MISION'; //palabra reservada para nombre mision
+IF      : 'SI'; //condicion if
+ELSE    : 'SINO'; //condicion si no se cumple if
+WHILE   : 'MIENTRAS'; //bucle
+TRUE    : 'VERDADERO'; //literal booleano verdadero 
+FALSE   : 'FALSO'; //literal booleano falso 
+AND   : 'Y';  
+OR    : 'O'; 
+NOT   : 'NO';
 
 ID      : [a-zA-Z_][a-zA-Z_0-9]* ; //identificadores
 

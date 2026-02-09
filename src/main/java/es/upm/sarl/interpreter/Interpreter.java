@@ -22,7 +22,7 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      * Memoria del programa SARL:
      * relaciona un nombre de variable con su valor
      */
-    private final Map<String, Object> variables = new HashMap<>();
+    private final Map<String, Value> variables = new HashMap<>();
 
     public Interpreter(Adapter adapter) {
         this.adapter = adapter;
@@ -50,7 +50,7 @@ public class Interpreter extends SARLBaseVisitor<Void> {
         // - si expr es "alt" => evalFactor -> variables.get("alt")
         // - si expr es "5 + 2*3" => evalExpr/Term/Factor aplican precedencia y devuelven el valor de la expr
         var values = exprArgs.stream()
-                .map(this::evalExpr)   // devuelve Object (Double o String por ahora)
+                .map(this::evalExpr)   // devuelve Value 
                 .toList(); //devuelve una lista de las expresiones ya evaluadas
         
         // 3) también guardamos el texto original de los argumentos para imprimirlos por pantalla por ahora
@@ -71,39 +71,15 @@ public class Interpreter extends SARLBaseVisitor<Void> {
     }
 
     /**
-     * let x = expr;
-     * Declaración de variable
-     * Semántica:
-     * - Evalúa la expresión
-     * - Guarda el resultado en la tabla de variables
-     */
-    @Override
-    public Void visitLetStmt(SARLParser.LetStmtContext ctx) {
-        String varName = ctx.ID().getText();
-
-        // Evaluación semántica de la expresión
-        Object value = evalExpr(ctx.expr());
-
-        variables.put(varName, value);//añadimos a mapa variables
-
-        System.out.println("LET: " + varName + " = " + value);
-        return null;
-    }
-
-    /**
      * x = expr;
      * Asignación de variable
      */
     @Override
     public Void visitAssignStmt(SARLParser.AssignStmtContext ctx) {
         String varName = ctx.ID().getText();
+        Value value = evalExpr(ctx.expr());
 
-        if (!variables.containsKey(varName)) {
-            throw new RuntimeException("Variable no declarada: " + varName);
-        }
-
-        Object value = evalExpr(ctx.expr());
-
+        // Si no existe, se declara; si existe, se reasigna
         variables.put(varName, value);
 
         System.out.println("ASSIGN: " + varName + " = " + value);
@@ -187,11 +163,11 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      * - Primero evalúa el primer término
      * - Luego aplica secuencialmente los operadores
      */
-    private Object evalExpr(SARLParser.ExprContext ctx) {
-        Object left = evalTerm(ctx.term(0));
+    private Value evalExpr(SARLParser.ExprContext ctx) {
+        Value left = evalTerm(ctx.term(0));
 
         for (int i = 1; i < ctx.term().size(); i++) {
-            Object right = evalTerm(ctx.term(i));
+            Value right = evalTerm(ctx.term(i));
 
             // El operador está entre los términos en el árbol
             String op = ctx.getChild(2 * i - 1).getText();
@@ -208,11 +184,11 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      *
      * Nivel intermedio de precedencia
      */
-    private Object evalTerm(SARLParser.TermContext ctx) {
-        Object left = evalFactor(ctx.factor(0));
+    private Value evalTerm(SARLParser.TermContext ctx) {
+        Value left = evalFactor(ctx.factor(0));
 
         for (int i = 1; i < ctx.factor().size(); i++) {
-            Object right = evalFactor(ctx.factor(i));
+            Value right = evalFactor(ctx.factor(i));
             String op = ctx.getChild(2 * i - 1).getText();
 
             left = applyBinaryOp(left, right, op);
@@ -229,21 +205,20 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      * - expresión entre paréntesis
      * - negación unaria
      */
-    private Object evalFactor(SARLParser.FactorContext ctx) {
+    private Value evalFactor(SARLParser.FactorContext ctx) {
         if (ctx.NUMBER() != null) {
-            return Double.valueOf(ctx.NUMBER().getText());
+            return Value.ofNumber(Double.parseDouble(ctx.NUMBER().getText()));
         }
 
         if (ctx.STRING() != null) {
-            return ctx.STRING().getText().replace("\"", "");
+            return Value.ofString(ctx.STRING().getText().replace("\"",""));
         }
 
         if (ctx.ID() != null) {
             String var = ctx.ID().getText();
-            if (!variables.containsKey(var)) {
-                throw new RuntimeException("Variable no definida: " + var);
-            }
-            return variables.get(var);
+            Value v = variables.get(var);
+            if (v == null) throw new RuntimeException("Variable no definida: " + var);
+            return v;
         }
 
         if (ctx.expr() != null) {
@@ -251,8 +226,8 @@ public class Interpreter extends SARLBaseVisitor<Void> {
         }
 
         if (ctx.MINUS() != null) {
-            Object value = evalFactor(ctx.factor());
-            return -((Number) value).doubleValue();
+            Value v = evalFactor(ctx.factor());
+            return Value.ofNumber(-v.asNumber());
         }
 
         throw new RuntimeException("Factor no soportado");
@@ -369,8 +344,8 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      * Siempre devuelve un valor booleano real
      */
     private boolean evalComparison(SARLParser.ComparisonContext ctx) {
-        Object left = evalExpr(ctx.expr(0));
-        Object right = evalExpr(ctx.expr(1));
+        Value left = evalExpr(ctx.expr(0));
+        Value right = evalExpr(ctx.expr(1));
         String op = ctx.compOp().getText();
 
         return applyComparison(left, right, op);
@@ -383,21 +358,16 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      * - Los operadores + - * / solo aceptan operandos numéricos
      * - El uso de valores booleanos produce un error semántico
      */
-    private Object applyBinaryOp(Object a, Object b, String op) {
+    private Value applyBinaryOp(Value a, Value b, String op) {
 
-        //Los operadores + - * / solo aceptan operandos numéricos
-        if (!(a instanceof Number) || !(b instanceof Number)) {
-            throw new RuntimeException("Operación aritmética solo permitida con números: "+ a + " " + op + " " + b);
-        }
-
-        double x = ((Number) a).doubleValue();
-        double y = ((Number) b).doubleValue();
+        double x = a.asNumber();
+        double y = b.asNumber();
 
         return switch (op) {
-            case "+" -> x + y;
-            case "-" -> x - y;
-            case "*" -> x * y;
-            case "/" -> x / y;
+            case "+" -> Value.ofNumber(x + y);
+            case "-" -> Value.ofNumber(x - y);
+            case "*" -> Value.ofNumber(x * y);
+            case "/" -> Value.ofNumber(x / y);
             default -> throw new RuntimeException("Operador desconocido: " + op);
         };
     }
@@ -409,15 +379,10 @@ public class Interpreter extends SARLBaseVisitor<Void> {
      * - Solo se permiten comparaciones entre valores numéricos
      * - El resultado es siempre un booleano real (true / false)
      */
-    private boolean applyComparison(Object a, Object b, String op) {
+    private boolean applyComparison(Value a, Value b, String op) {
 
-        //Los operadores < > <= >= solo aceptan operandos numéricos
-        //== y != pueden ampliarse más adelante, pero por ahora también numéricos
-        if (!(a instanceof Number) || !(b instanceof Number)) {
-            throw new RuntimeException("Comparación solo permitida entre valores numéricos");
-        }
-        double x = ((Number) a).doubleValue();
-        double y = ((Number) b).doubleValue();
+        double x = a.asNumber();
+        double y = b.asNumber();
 
         return switch (op) {
             case "<"  -> x < y;
