@@ -93,6 +93,24 @@ public class Controlador {
     private static final double YAW_KP = 4.0;  //Cuanto mas alto mas agresiva es la correccion
     private static final double YAW_KD = 1.0;   // usando rateZ del gyro, frena la correccion antes de que se pase
 
+    // --- Diagnóstico yaw (para logs) ---
+    private double yawNow = 0.0;
+    private double yawError = 0.0;
+    private double yawRate = 0.0;
+    private double yawU = 0.0;
+
+    // --- Velocidad estimada (m/s) ---
+    private double prevX = 0.0, prevY = 0.0;
+    private boolean velInit = false;
+
+    // Control de velocidad (outer-loop)
+    private static final double V_CRUISE = 1.0;   // m/s (velocidad “YOLO-friendly”)
+    private static final double V_STOP_DIST = 1.5; // m: dentro de esta distancia empezamos a frenar
+    private static final double V_KP = 0.20;      // convierte error de velocidad -> tilt (rad)
+    private static final double V_KD = 0.0;      // amortigua (opcional)
+
+
+
     public Controlador() {//constructor
         robot = new Robot();
 
@@ -107,7 +125,7 @@ public class Controlador {
             // Cabecera logs csv
             logWriter.println(
                 "t,x,y,z,roll,pitch,yaw,rollRef,pitchRef,baseThrottle," +
-                "errorX,errorY,posXIntegral,posYIntegral,altIntegral," +
+                "errorX,errorY,altIntegral," +
                 "yawRef,yawError,yawRate,yawU"
             );
             logWriter.flush();
@@ -321,36 +339,59 @@ public class Controlador {
      * Este método es parte del lazo externo de control de posición
      */
     private void PDHorizontalControl() {
-        double[] pos = gps.getValues(); // [x, y, z]
+        double[] pos = gps.getValues();
         double x = pos[0];
         double y = pos[1];
 
-        double dt = timeStep / 1000.0; //misma explicación que método anterior
+        double dt = timeStep / 1000.0;
 
-        // Errores de posición (positivos si estamos "por detrás" o "a un lado" del objetivo)
-        double errorX = targetX - x; 
-        double errorY = targetY - y; 
+        if (!velInit) {
+            prevX = x; prevY = y;
+            velInit = true;
+        }
 
-        // Terminos derivativos de los PID de X e Y
-        double dErrorX = (errorX - prevPosXError) / dt;
-        double dErrorY = (errorY - prevPosYError) / dt;
+        // Velocidad actual estimada
+        double vx = (x - prevX) / dt;
+        double vy = (y - prevY) / dt;
+        prevX = x; prevY = y;
 
-        // guarda los errores actuales para usarlos en el siguiente step al calcular la derivada (dErrorX, dErrorY)
-        prevPosXError = errorX;
-        prevPosYError = errorY;
+        // Vector hacia objetivo
+        double ex = targetX - x;
+        double ey = targetY - y;
+        double dist = Math.sqrt(ex*ex + ey*ey);
 
-        // PD de posición en X e Y: calcula cuánto inclinar el dron en pitch (uX) y roll (uY) según la distancia y velocidad hacia el objetivo
-        // Mapeo:
-        // uX: error en X -> inclinación "hacia delante/atrás" 
-        // uY: error en Y -> inclinación "a la izquierda/derecha" 
-        double uX = POS_KP * errorX + POS_KD * dErrorX;
-        double uY = POS_KP * errorY + POS_KD * dErrorY;
-        
-        // Se limita la inclinación deseada (en radianes) para evitar que el dron se incline más allá de lo seguro: máx. ±7° (aprox 0.12 rad)
-        // pitchRef: inclinación hacia adelante o atrás (para moverse en X) tras clamp
-        // rollRef: inclinación hacia izquierda o derecha (para moverse en Y) tras clamp, con signo invertido tras pruebas
-        pitchRef = clamp(uX, -MAX_TILT_RAD, MAX_TILT_RAD);
-        rollRef  = clamp(-uY, -MAX_TILT_RAD, MAX_TILT_RAD);
+        // Dirección normalizada (si estás encima, evita NaN)
+        double ux = (dist > 1e-6) ? (ex / dist) : 0.0;
+        double uy = (dist > 1e-6) ? (ey / dist) : 0.0;
+
+        // Perfil de velocidad deseada:
+        // - lejos: V_CRUISE constante
+        // - cerca: baja linealmente hasta 0 (para parar suave)
+        double vDes = V_CRUISE;
+        if (dist < V_STOP_DIST) {
+            vDes = V_CRUISE * (dist / V_STOP_DIST); // 0..V_CRUISE
+        }
+
+        // Velocidad deseada en X/Y (en mundo)
+        double vDesX = vDes * ux;
+        double vDesY = vDes * uy;
+
+        // Error de velocidad
+        double evx = vDesX - vx;
+        double evy = vDesY - vy;
+
+        // “Controlador de velocidad” -> tilt
+        // pitch controla X, roll controla Y (con el signo que ya descubriste)
+        double pitchCmd = V_KP * evx;
+        double rollCmd  = -V_KP * evy;
+
+        // Derivativo simple usando la propia velocidad (opcional)
+        pitchCmd -= V_KD * vx;
+        rollCmd  += V_KD * vy;
+
+        // Clamp final por seguridad / estabilidad de cámara
+        pitchRef = clamp(pitchCmd, -MAX_TILT_RAD, MAX_TILT_RAD);
+        rollRef  = clamp(rollCmd,  -MAX_TILT_RAD, MAX_TILT_RAD);
 
     }
 
@@ -361,19 +402,22 @@ public class Controlador {
     private double PDYawControl() {
         double[] rpy = imu.getRollPitchYaw();
         double yaw = rpy[2];
-
+        this.yawNow = yaw;
         // error de yaw 
         double error = yawRef - yaw;
         // error envuelto a [-pi, pi]
         while (error > Math.PI)  error -= 2.0 * Math.PI;
         while (error < -Math.PI) error += 2.0 * Math.PI;
+        this.yawError = error;
 
-        // derivada: se usa gyro en Z (wz ~ yawRate)
+        // derivada: se usa gyro en Z (wz ~ rate)
         double[] g = gyro.getValues();
         double yawRate = g[2];
+        this.yawRate = yawRate;
 
         // PD (OJO: para D usamos yawRate, que ya es derivada física)
         double u = YAW_KP * error - YAW_KD * yawRate;  // signo menos: si giras en la dirección del error, freno
+        this.yawU = u;
 
         return u;
     }
@@ -409,14 +453,14 @@ public class Controlador {
         double errorX = targetX - pos[0];
         double errorY = targetY - pos[1];
 
-        logWriter.printf(Locale.US,
+       logWriter.printf(Locale.US,
             "%.3f,%.3f,%.3f,%.3f," +   // t, x, y, z
-            "%.4f,%.4f,%.4f," +     // roll, pitch, yaw
-            "%.4f,%.4f," +        // rollRef, pitchRef
-            "%.1f," +             // baseThrottle
-            "%.4f,%.4f," +     // errorX, errorY
-            "%.4f," +        // altIntegral
-            "%.4f",       // yawRef
+            "%.4f,%.4f,%.4f," +        // roll, pitch, yaw
+            "%.4f,%.4f," +             // rollRef, pitchRef
+            "%.1f," +                  // baseThrottle
+            "%.4f,%.4f," +             // errorX, errorY
+            "%.4f," +                  // altIntegral
+            "%.4f,%.4f,%.4f,%.4f%n",   // yawRef,yawError,yawRate,yawU
             t,
             pos[0], pos[1], pos[2],
             rpy[0], rpy[1], rpy[2],
@@ -424,7 +468,7 @@ public class Controlador {
             baseThrottle,
             errorX, errorY,
             altIntegral,
-            yawRef
+            yawRef, yawError, yawRate, yawU
         );
 
         // Fuerza el volcado del buffer al archivo
@@ -508,34 +552,110 @@ public class Controlador {
     }
  
     public static void main(String[] args) {
-        Controlador c = new Controlador(); //instanciamos controlador
+        Controlador c = new Controlador();
 
-        // Hilo que corre el bucle de control continuo
-        Thread controlThread = new Thread(() -> {
-            c.run();   // este es tu while(robot.step(...)) 
-        });
+        // Hilo control continuo
+        Thread controlThread = new Thread(c::run);
         controlThread.start();
 
         try {
+            Thread.sleep(6000); // dejar que estabilice y coja altura
 
-            //Aqui podemos jugar con el dron como queramos añadiendo temporizadores y llamando a los metodos de alto nivel
+            // Ruta de prueba: {x,y,z, holdSeconds}
+            // holdSeconds = 0 -> no hace pausa
+            double[][] route = new double[][] {
+                {  5.0,   5.0, 3.0, 0.0 },   // llega y hover 2s
+                { 10.0,   0.0, 10.0, 0.0 },   // llega y sigue
+                { -5.0,  -5.0, 6.0, 0.0 },   // llega y hover 1.5s
+                { -10.0, 10.0, 3.0, 0.0 }    // final
+            };
 
-            Thread.sleep(6000);
-            //c.hoverHere();  // fijar hover en el punto inicial
+            // Tolerancias y estabilidad (ajusta a gusto)
+            double posTol = 0.50;      // m (radio en XY)
+            double altTol = 0.35;      // m (Z)
+            double stableSec = 0.60;   // s dentro del umbral para confirmar "llegó"
+            double timeoutSec = 60.0;  // s por waypoint para no quedarte colgado
 
-            c.moveTo(5.0, 5.0, 3);  // ir a (5,5,3)
-            Thread.sleep(20000);  //espera 20 segundos
-            
-            c.moveTo(-10.0, -5.0, 3.0);  // ir a (-10,-5,3)
-            Thread.sleep(20000);  //espera 20 segundos
+            for (int i = 0; i < route.length; i++) {
+                double tx = route[i][0], ty = route[i][1], tz = route[i][2];
+                double hold = route[i][3];
 
-            c.changeAltitude(5.0);  // subir a z = 5.0
+                System.out.printf("%n== Waypoint %d -> (%.2f, %.2f, %.2f) hold=%.2fs ==%n",
+                        i + 1, tx, ty, tz, hold);
 
-            //c.setYaw(Math.PI / 2.0);  // girar 90 grados, pero no funciona de momento, desestabiliza al dron
+                c.moveTo(tx, ty, tz);
+
+                boolean ok = waitUntilArrived(c, tx, ty, tz, posTol, altTol, stableSec, timeoutSec);
+                if (!ok) {
+                    System.out.println("WARN: Timeout esperando llegada. Paso al siguiente waypoint.");
+                    continue;
+                }
+
+                // Al llegar: “congela” objetivo en el punto actual para no estar recalculando micro-correcciones
+                c.hoverHere();
+
+                if (hold > 0.0) {
+                    holdSeconds(hold);
+                }
+            }
+
+            System.out.println("\nRuta completada.");
 
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-    }   
-}
+    }
 
+    /** Espera hasta que esté dentro del umbral durante stableSec (evita falsos positivos por bamboleo). */
+    private static boolean waitUntilArrived(
+            Controlador c,
+            double tx, double ty, double tz,
+            double posTol, double altTol,
+            double stableSec,
+            double timeoutSec
+    ) throws InterruptedException {
+
+        long start = System.currentTimeMillis();
+        long stableStart = -1L;
+
+        // Usamos el timestep del controlador para no spamear
+        int sleepMs = Math.max(10, c.timeStep);
+
+        while (true) {
+            double[] p = c.gps.getValues();
+            double dx = tx - p[0];
+            double dy = ty - p[1];
+            double dz = tz - p[2];
+
+            double distXY = Math.sqrt(dx * dx + dy * dy);
+            boolean inside = (distXY <= posTol) && (Math.abs(dz) <= altTol);
+
+            long now = System.currentTimeMillis();
+
+            if (inside) {
+                if (stableStart < 0) stableStart = now;
+
+                double stableElapsed = (now - stableStart) / 1000.0;
+                if (stableElapsed >= stableSec) {
+                    System.out.printf("ARRIVED: distXY=%.3f dz=%.3f (stable %.2fs)%n",
+                            distXY, dz, stableElapsed);
+                    return true;
+                }
+            } else {
+                stableStart = -1L; // reset si sale del umbral
+            }
+
+            double elapsed = (now - start) / 1000.0;
+            if (elapsed >= timeoutSec) {
+                return false;
+            }
+
+            Thread.sleep(sleepMs);
+        }
+    }
+
+    private static void holdSeconds(double seconds) throws InterruptedException {
+        long ms = (long) (seconds * 1000.0);
+        Thread.sleep(Math.max(0, ms));
+    }
+}
