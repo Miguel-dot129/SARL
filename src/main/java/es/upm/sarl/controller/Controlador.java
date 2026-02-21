@@ -10,6 +10,7 @@ import com.cyberbotics.webots.controller.Gyro;
 import com.cyberbotics.webots.controller.InertialUnit;
 import com.cyberbotics.webots.controller.Motor;
 import com.cyberbotics.webots.controller.Robot;
+import com.cyberbotics.webots.controller.Camera;
 
 public class Controlador {
 
@@ -48,14 +49,22 @@ public class Controlador {
     private static final double HOVER_THROTTLE = 68.5; 
 
     // Ganancias de altitud ajustadas a mano
-    private static final double ALT_KP = 4.0;  // proporcional, cuanto mayor más rapido se mueve el dron 
-    private static final double ALT_KI = 0.8;   // integral para errores acumulados (clava el valor objetivo sumando errores a lo largo del tiempo hasta un limite)
-    private static final double ALT_KD = 7.5;  // derivativa, cuanto mayor mas frena antes de llegar al objetivo (evita pasarse, aunque si va muy rapido se sigue pasando)
+    private static final double ALT_KP = 3.0;  // proporcional, cuanto mayor más rapido se mueve el dron 
+    private static final double ALT_KI = 0.4;   // integral para errores acumulados (clava el valor objetivo sumando errores a lo largo del tiempo hasta un limite)
+    private static final double ALT_KD = 3.0;  // derivativa, cuanto mayor mas frena antes de llegar al objetivo (evita pasarse, aunque si va muy rapido se sigue pasando)
 
     // Estado PID de altitud
     private double targetAltZ = 1.5;  // objetivo de altitud, la inicializo en 1.5 metros
     private double altIntegral = 0.0; // acumulador del término integral del error de altitud a lo largo del tiempo. Corrige errores persistentes como pequeños descensos por deriva o peso desigual
     private double prevAltError = 0.0; // guarda el error de altitud anterior para calcular la derivada en el PID (cambio del error en el tiempo).
+
+    // Altitud objetivo "pedida" por la misión vs altitud objetivo "suavizada" por el controlador
+    private double targetAltZCmd = 1.5; // lo que pide moveTo/changeAltitude
+    private static final double ALT_REF_RATE = 0.8; // m/s (máx subida/bajada)
+    
+// Estado adicional para derivada sobre la medida (velocidad vertical)
+    private double prevZ = 0.0;
+    private boolean zInit = false;
 
     // Límites para la integral y para baseThrottle (Aunque es muy raro que el dron supere esos valores)
     private static final double ALT_INT_MAX = 1.0; //Limita cuánto puede influir el error acumulado sobre el throttle
@@ -90,9 +99,19 @@ public class Controlador {
     // ====== CONTROL DE YAW (ROTACIÓN EN Z) ======
     private double yawRef = 0.0;   // referencia 
 
-    private static final double YAW_KP = 4.0;  //Cuanto mas alto mas agresiva es la correccion
-    private static final double YAW_KD = 1.0;   // usando rateZ del gyro, frena la correccion antes de que se pase
+    private static final double YAW_KP = 1.0;  //Cuanto mas alto mas agresiva es la correccion
+    private static final double YAW_KD = 1.5;   // usando rateZ del gyro, frena la correccion antes de que se pase
 
+    // ====== YAW MODE ======
+    private enum YawMode { AUTO_FACE_TARGET, MANUAL }
+    private YawMode yawMode = YawMode.AUTO_FACE_TARGET;
+
+    // Solo auto-yaw si el objetivo está "lejos" (evita micro-correcciones al llegar)
+    private static final double YAW_AUTO_MIN_DIST = 0.8; // m
+
+    // Límite de velocidad con la que cambiamos yawRef (evita giros bruscos)
+    private static final double YAW_REF_MAX_RATE = 0.6; // rad/s (ajustable)
+    
     // --- Diagnóstico yaw (para logs) ---
     private double yawNow = 0.0;
     private double yawError = 0.0;
@@ -109,6 +128,7 @@ public class Controlador {
     private static final double V_KP = 0.20;      // convierte error de velocidad -> tilt (rad)
     private static final double V_KD = 0.0;      // amortigua (opcional)
 
+    private Camera camera;
 
 
     public Controlador() {//constructor
@@ -147,6 +167,9 @@ public class Controlador {
 
         compass = (Compass) robot.getDevice("compass");//te dice hacia dónde está el norte en el mundo, no lo uso de momento
         compass.enable(timeStep);
+
+        camera = (Camera) robot.getDevice("camera");  // revisa el nombre exacto en el PROTO
+        camera.enable(timeStep);
 
         //inicializa los motores con el nombre que tienen en el proto
         rearLeft = (Motor) robot.getDevice("rear left propeller");
@@ -282,17 +305,25 @@ public class Controlador {
     }
 
     /**
-     * Controlador PID de altitud (eje Z).
-     * Calcula cuánto empuje extra (o de menos) necesitan los motores para subir o bajar,
-     * comparando la altitud deseada (targetAltZ) con la actual (obtenida del GPS).
-     * Usa un PID clásico: P (según lo lejos que estás), I (suma de errores pasados para ajustar desequilibrios),
-     * y D (si estás subiendo o bajando demasiado rápido).
-     * El resultado ajusta la baseThrottle (potencia base del dron), que luego usan todos los motores.
-     * Se limita la salida para evitar excesos peligrosos.
+     * Controlador de altitud (eje Z) con PID + mejoras de estabilidad.
+     *
+     * Qué hace este método:
+     * 1) Lee la altitud actual (z) desde el GPS.
+     * 2) Suaviza la referencia de altitud (targetAltZ) mediante una rampa para evitar "latigazos"
+     *    cuando la misión pide cambios bruscos (targetAltZCmd).
+     * 3) Calcula el error de altitud y aplica un PID:
+     *    - P: empuja según lo lejos que estás del objetivo
+     *    - I: corrige errores persistentes (p.ej., si el dron tiende a caer ligeramente)
+     *    - D: frena usando la velocidad vertical real (vz), evitando el "derivative kick"
+     * 4) Ajusta baseThrottle (empuje base común) y lo limita a un rango seguro.
+     *
+     * Resultado:
+     * - Subidas/bajadas suaves y controladas.
+     * - Transiciones estables entre waypoints con distinta altitud.
      */
     private void PDAltitudeControl() {
         double[] pos = gps.getValues(); // [x, y, z]
-        double z = pos[2]; //cojo la z
+        double z = pos[2]; //cojo la z actual
 
         // Se convierte el paso de simulación (timeStep) de milisegundos a segundos dividiendo entre 1000,
         // ya que Webots proporciona el timeStep en milisegundos pero las ecuaciones de control PID 
@@ -301,9 +332,29 @@ public class Controlador {
         // la integral mantiene unidades de error·s, y la derivada de error (error/dt) resulta en error/segundo.
         double dt = timeStep / 1000.0;
 
+        // Inicialización del término derivativo (solo la primera vez) 
+        // La primera iteración no tiene "prevZ" válido; si no lo inicializamos, vz saldría enorme.
+        if (!zInit) {
+            prevZ = z;
+            zInit = true;
+        }
+
+        // -- Rampa del setpoint (targetAltZ) --
+        // maxStep es la variación máxima de altitud objetivo permitida en ESTE paso (m).
+        // Ej: si ALT_REF_RATE = 0.8 m/s y dt=0.032s → maxStep≈0.0256 m por step.
+        double maxStep = ALT_REF_RATE * dt;
+
+        // dzRef es cuánto nos falta para que targetAltZ (ref suavizada) alcance targetAltZCmd (ref pedida por la misión)
+        double dzRef = targetAltZCmd - targetAltZ;
+        // Limitamos dzRef para que targetAltZ no "salte" de golpe: sube/baja como mucho maxStep por step
+        dzRef = clamp(dzRef, -maxStep, maxStep);
+        // Actualizamos la referencia suavizada que realmente usará el PID
+        targetAltZ += dzRef;
+
         // error de altitud: positivo si estamos por debajo del objetivo
         double error = targetAltZ - z;
 
+        // INTEGRAL
         // Se acumula el error de altitud en el tiempo para el término integral del PID (error * dt), 
         // lo cual permite corregir errores sostenidos que el término proporcional no puede eliminar (como empuje desigual o viento constante).
         // Luego se limita (clamp) esta integral a un valor máximo y mínimo para evitar que crezca indefinidamente (problema conocido como "wind-up"),
@@ -311,20 +362,23 @@ public class Controlador {
         altIntegral += error * dt;
         altIntegral = clamp(altIntegral, -ALT_INT_MAX, ALT_INT_MAX);
 
-        // Se calcula el término derivativo del PID como la diferencia del error actual respecto al anterior dividido por el tiempo (dt). 
-        // Esto estima qué tan rápido está cambiando el error de altitud (velocidad vertical), y se usa para anticipar el movimiento y frenarlo suavemente.
-        // Luego se actualiza prevAltError para usarlo en la siguiente iteración.
-        double dError = (error - prevAltError) / dt;
-        prevAltError = error;
+        // -- Término derivativo (D) SOBRE LA MEDIDA --
+        // Calculamos la velocidad vertical real vz (m/s) como derivada de la medida z.
+        // Esto evita el "derivative kick" cuando cambia targetAltZCmd de golpe.
+        double vz = (z - prevZ) / dt;
+        // Actualizamos prevZ para la siguiente iteración
+        prevZ = z;
 
         // Se calcula la salida del PID de altitud combinando los tres términos: 
         // Proporcional (P): responde al error actual,
         // Integral (I): corrige errores acumulados a lo largo del tiempo,
-        // Derivativo (D): anticipa futuros errores por la velocidad del cambio.
+        // Derivativo (D): frena según velocidad vertical real (si sube rápido, -KD*vz reduce empuje).
         // La salida es la correccion (u) que se debe aplicar al valor de velocidad de sustentación fija (hover)
-        double u = ALT_KP * error + ALT_KI * altIntegral + ALT_KD * dError;
+        double u = ALT_KP * error + ALT_KI * altIntegral - ALT_KD * vz;
 
-        // Se ajusta la potencia base de los motores sumando la corrección calculada (u) al valor de sustentación fija (hover).
+        // -- Conversión a empuje base --
+        // HOVER_THROTTLE es el empuje aproximado para mantenerse flotando sin subir/bajar.
+        // Le sumamos u para subir (u>0) o bajar (u<0).
         // Luego se limita (clamp) para asegurar que esté dentro del rango seguro de potencia del dron (60-200)
         baseThrottle = HOVER_THROTTLE + u;
         baseThrottle = clamp(baseThrottle, THROTTLE_MIN, THROTTLE_MAX);
@@ -332,62 +386,112 @@ public class Controlador {
     }
 
     /**
-     * Calcula el control PD horizontal en los ejes X e Y.
-     * Convierte el error de posición respecto a las coordenadas objetivo
-     * en referencias de inclinación (pitchRef y rollRef) que permitirán 
-     * que el dron se desplace lateralmente inclinándose hacia el objetivo
-     * Este método es parte del lazo externo de control de posición
+     * Control horizontal (X/Y) basado en velocidad deseada (outer-loop).
+     *
+     * Idea simple:
+     * - No le decimos al dron "inclínate tanto porque estás a X metros".
+     * - Le decimos "muévete a esta velocidad hacia el objetivo".
+     * - Luego convertimos esa velocidad deseada en una inclinación (pitch/roll) limitada y segura.
+     *
+     * Pasos que hace este método:
+     * 1) Lee la posición (x,y) con el GPS.
+     * 2) Estima la velocidad actual (vx, vy) derivando el GPS.
+     * 3) Calcula el vector al waypoint y su distancia.
+     * 4) AUTO-YAW: si está activado, actualiza yawRef para mirar al objetivo de forma suave.
+     * 5) Genera una velocidad deseada vDes: lejos = V_CRUISE; cerca = frena linealmente hasta 0.
+     * 6) Calcula el error de velocidad (vDes - vActual).
+     * 7) Convierte el error de velocidad del marco mundo al marco del dron (world → body) usando el yaw.
+     * 8) Mapea ese error a comandos de inclinación (pitchCmd/rollCmd).
+     * 9) Aplica límites (clamp) para mantener estabilidad.
+     *
+     * Resultado:
+     * - Movimiento más natural y estable.
+     * - Frenado suave al llegar al waypoint.
+     * - Permite rotar (yaw) sin que el control XY se vuelva loco (gracias al world→body).
      */
     private void PDHorizontalControl() {
         double[] pos = gps.getValues();
         double x = pos[0];
         double y = pos[1];
 
+        // Convertimos timestep de ms a s para cálculos con derivadas/velocidades
         double dt = timeStep / 1000.0;
 
+         // Inicialización segura del cálculo de velocidades:
+        // En el primer ciclo no tenemos prevX/prevY válidos para derivar.
         if (!velInit) {
             prevX = x; prevY = y;
             velInit = true;
         }
 
-        // Velocidad actual estimada
+        // -- Estimación de velocidad actual (derivando el GPS) --
+        // vx/vy aproximan cuán rápido nos movemos en el mundo (m/s)
         double vx = (x - prevX) / dt;
         double vy = (y - prevY) / dt;
+        // Actualizamos prevX/prevY para el siguiente step
         prevX = x; prevY = y;
 
-        // Vector hacia objetivo
-        double ex = targetX - x;
+        // -- Vector desde la posición actual hacia objetivo --
+        double ex = targetX - x; 
         double ey = targetY - y;
+        // Distancia al objetivo en el plano XY (m)
         double dist = Math.sqrt(ex*ex + ey*ey);
 
-        // Dirección normalizada (si estás encima, evita NaN)
-        double ux = (dist > 1e-6) ? (ex / dist) : 0.0;
-        double uy = (dist > 1e-6) ? (ey / dist) : 0.0;
+        // -- AUTO YAW: mira hacia el objetivo (vector ex, ey) --
+        // Si estamos en modo AUTO, hacemos que el dron mire hacia el waypoint
+        if (yawMode == YawMode.AUTO_FACE_TARGET && dist > YAW_AUTO_MIN_DIST) {
+            // yaw deseado para apuntar al waypoint: atan2(ey, ex) devuelve el ángulo en radianes
+            double desiredYaw = Math.atan2(ey, ex);
 
-        // Perfil de velocidad deseada:
-        // - lejos: V_CRUISE constante
-        // - cerca: baja linealmente hasta 0 (para parar suave)
-        double vDes = V_CRUISE;
-        if (dist < V_STOP_DIST) {
-            vDes = V_CRUISE * (dist / V_STOP_DIST); // 0..V_CRUISE
+            // dtYaw (s): usado para limitar cuán rápido cambiamos la referencia de yaw por step
+            double dtYaw = timeStep / 1000.0;
+            // maxStep (rad): cambio máximo permitido de yawRef en este step (rate limiter)
+            double maxStep = YAW_REF_MAX_RATE * dtYaw;
+
+            // Acercamos yawRef al desiredYaw de forma gradual, sin saltos bruscos
+            yawRef = approachAngle(yawRef, desiredYaw, maxStep);
         }
 
-        // Velocidad deseada en X/Y (en mundo)
+        // -- Dirección normalizada hacia el objetivo (vector unitario) --
+        // Si dist es casi 0, evitamos dividir por 0 (NaN).
+        double ux = (dist > 1e-6) ? (ex / dist) : 0.0; // componente X del vector unitario
+        double uy = (dist > 1e-6) ? (ey / dist) : 0.0; // componente Y del vector unitario
+
+        // -- Perfil de velocidad deseada: --
+        // - lejos: V_CRUISE constante
+        // - cerca: baja linealmente hasta 0 (para parar suave)
+        double vDes = V_CRUISE; // velocidad deseada base (m/s)
+        if (dist < V_STOP_DIST) { // si estamos dentro de la zona de frenado...
+            vDes = V_CRUISE * (dist / V_STOP_DIST); // // reducimos: cuando dist→0, vDes→0
+        }
+
+        // -- Velocidad deseada en el mundo (proyectada en X/Y) --
         double vDesX = vDes * ux;
         double vDesY = vDes * uy;
 
-        // Error de velocidad
-        double evx = vDesX - vx;
+        // -- Error de velocidad (lo que quiero - lo que tengo) --
+        double evx = vDesX - vx; // si es positivo: me falta velocidad hacia +X
         double evy = vDesY - vy;
 
-        // “Controlador de velocidad” -> tilt
-        // pitch controla X, roll controla Y (con el signo que ya descubriste)
-        double pitchCmd = V_KP * evx;
-        double rollCmd  = -V_KP * evy;
+        // ----- Transformación world -> body (CLAVE para que no se rompa al girar) -----
+        // El GPS da velocidades en el marco del mundo
+        // Pero pitch/roll se aplican en el marco del dron (cuerpo)
+        // Por eso rotamos el error de velocidad usando el yaw actual del dron
+        double yaw = imu.getRollPitchYaw()[2];
+        double cy = Math.cos(yaw);
+        double sy = Math.sin(yaw);
 
-        // Derivativo simple usando la propia velocidad (opcional)
-        pitchCmd -= V_KD * vx;
-        rollCmd  += V_KD * vy;
+        // Rotación por -yaw: convertimos (evx, evy) del mundo al cuerpo del dron
+        double ev_body_x =  cy * evx + sy * evy; // componente en eje X del dron (delante/atrás)
+        double ev_body_y = -sy * evx + cy * evy; // componente en eje Y del dron (izq/dcha)
+
+
+        // ----- Mapeo a inclinaciones (pitch/roll) -----
+        // pitch manda en el eje X del dron (avanzar/retroceder).
+        // roll manda en el eje Y del dron (izquierda/derecha).
+        // V_KP indica cuánta inclinación ordenamos por cada m/s de error de velocidad.
+        double pitchCmd = V_KP * ev_body_x;
+        double rollCmd  = -V_KP * ev_body_y;
 
         // Clamp final por seguridad / estabilidad de cámara
         pitchRef = clamp(pitchCmd, -MAX_TILT_RAD, MAX_TILT_RAD);
@@ -396,30 +500,95 @@ public class Controlador {
     }
 
     /**
-     * PD de yaw. NO TERMINADO, DE MOMENTO FALLA AL CAMBIAR EL YAW, SE MANTIENE EN 0 PORQUE ASÍ NO AFECTA AL RESTO DE PIDs
-     * Devuelve un "torque" yawU que hay que sumar/restar a los motores para girar el dron hacia yawRef
-     *      */
+     * Control de yaw (rotación sobre el eje Z) mediante un PD.
+     *
+     * Objetivo:
+     * - Hacer que el dron gire hasta alcanzar una orientación deseada (yawRef).
+     *
+     * Qué devuelve:
+     * - Un valor "yawU" (corrección) que se mezcla en los motores para generar torque de giro.
+     *
+     * Ideas clave:
+     * - P (proporcional): si estoy mirando "mal", giro más fuerte.
+     * - D (derivativo): si estoy girando muy rápido, freno para no pasarme.
+     *
+     * Detalles importantes:
+     * - Se envuelve el error angular a [-pi, pi] para que el dron elija el giro más corto.
+     *   Ej: entre 179° y -179° no debe girar 358°, sino 2°.
+     * - Para el término D NO derivamos el error; usamos directamente el giroscopio (yawRate),
+     *   que ya mide la velocidad angular real en Z (rad/s). Esto hace el control más estable.
+     *
+     */
     private double PDYawControl() {
+        // Asegura que yawRef siempre está en el rango [-pi, pi]
+        // (por ejemplo, si alguien hace setYaw(yawRef + 2*pi), lo normalizamos)
+        yawRef = wrapPi(yawRef);
+
+        // Leemos orientación absoluta del dron con la IMU: [roll, pitch, yaw]
         double[] rpy = imu.getRollPitchYaw();
-        double yaw = rpy[2];
-        this.yawNow = yaw;
-        // error de yaw 
+        double yaw = rpy[2]; // Extraemos el yaw actual (rad)
+        this.yawNow = yaw; //para logs de pruebas
+
+        // ----- Error angular de yaw -----
+        // Diferencia entre a dónde quiero mirar (yawRef) y a dónde estoy mirando (yaw)
         double error = yawRef - yaw;
-        // error envuelto a [-pi, pi]
+        // Envolvemos el error a [-pi, pi] para evitar giros largos innecesarios
         while (error > Math.PI)  error -= 2.0 * Math.PI;
         while (error < -Math.PI) error += 2.0 * Math.PI;
         this.yawError = error;
 
-        // derivada: se usa gyro en Z (wz ~ rate)
+        // -- Término derivativo (D) usando el giroscopio --
+        // gyro.getValues() devuelve velocidad angular [wx, wy, wz] en rad/s (marco del dron)
         double[] g = gyro.getValues();
+        // wz es la velocidad de giro en yaw (rad/s): positivo = gira en un sentido, negativo = en el otro
         double yawRate = g[2];
-        this.yawRate = yawRate;
+        this.yawRate = yawRate; //para logs de pruebas
 
-        // PD (OJO: para D usamos yawRate, que ya es derivada física)
-        double u = YAW_KP * error - YAW_KD * yawRate;  // signo menos: si giras en la dirección del error, freno
-        this.yawU = u;
+        // ----- Control PD -----
+        // P: corrige según el error angular (si error es grande, giro fuerte).
+        // D: frena según la velocidad de giro real (si ya estoy girando rápido, reduzco torque).
+        // El signo "-" en el término derivativo es el "freno" típico: si yawRate va en la dirección del error, restamos.
+        double u = YAW_KP * error - YAW_KD * yawRate;  
+        this.yawU = u; //para logs
 
+        // Devolvemos yawU para que PDAttitude lo mezcle en los motores (motor mixing)
         return u;
+    }
+
+    /**
+     * Normaliza un ángulo a [-pi, pi].
+     * 
+     * - Los ángulos son "circulares".
+     * - 3.50 rad y -2.78 rad pueden representar la misma orientación en un círculo.
+     * - Este método fuerza cualquier ángulo a la representación estándar entre -pi y +pi.
+     */
+    private static double wrapPi(double a) {
+        while (a > Math.PI) a -= 2.0 * Math.PI; // Si el ángulo está por encima de +pi, le restamos 2*pi hasta que entre en el rango
+        while (a < -Math.PI) a += 2.0 * Math.PI;
+        // Devuelve el ángulo ya "envuelto"
+        return a;
+    }
+
+    /**
+     * Acerca un ángulo "current" hacia "target" con un paso máximo "maxStep" (rad).
+     *
+     * - Sirve para mover yawRef suavemente, sin saltos bruscos.
+     * - Es un "limitador de velocidad" para referencias angulares.
+     *
+     * Ejemplo:
+     * - Si target cambia de golpe, no saltamos al target.
+     * - Vamos acercándonos poco a poco a razón de maxStep por iteración.
+     */
+    private static double approachAngle(double current, double target, double maxStep) {
+        // Calculamos el error angular mínimo (en [-pi, pi]) entre current y target
+        double err = wrapPi(target - current);
+
+        // Limitamos cuánto podemos avanzar en esta iteración (evita cambios bruscos)
+        if (err > maxStep) err = maxStep;
+        if (err < -maxStep) err = -maxStep;
+
+        // Aplicamos el paso limitado y devolvemos el ángulo resultante normalizado
+        return wrapPi(current + err);
     }
 
     /**
@@ -488,10 +657,13 @@ public class Controlador {
         targetX = pos[0];
         targetY = pos[1];
         targetAltZ = pos[2];
+
+        // al hacer hover, pasa a MANUAL para que no te lo pise el auto
+        yawMode = YawMode.MANUAL;
         yawRef = rpy[2];
 
         System.out.printf(
-            "CMD  | hoverHere() -> targetX=%.3f targetY=%.3f targetZ=%.3f yawRef=%.3f%n",
+            "CMD  | hoverHere() -> targetX=%.3f targetY=%.3f targetZ=%.3f yawRef=%.3f [MANUAL]%n",
             targetX, targetY, targetAltZ, yawRef
         );
     }
@@ -500,7 +672,7 @@ public class Controlador {
      * Cambia la altitud objetivo, manteniendo X/Y/Yaw.
      */
     public void changeAltitude(double newAlt) {
-        targetAltZ = newAlt;
+         targetAltZCmd = newAlt;
         System.out.printf("CMD  | changeAltitude(%.3f)%n", newAlt);
     }
 
@@ -511,10 +683,13 @@ public class Controlador {
     public void moveTo(double x, double y, double z) {
         targetX = x;
         targetY = y;
-        targetAltZ = z;
+        targetAltZCmd = z;  
+
+        // Por defecto: si te mueves a un punto, auto-yaw activo
+        yawMode = YawMode.AUTO_FACE_TARGET;
 
         System.out.printf(
-            "CMD  | moveTo(%.3f, %.3f, %.3f) -> nuevo objetivo%n",
+            "CMD  | moveTo(%.3f, %.3f, %.3f) -> nuevo objetivo [AUTO_YAW]%n",
             x, y, z
         );
     }
@@ -523,8 +698,16 @@ public class Controlador {
      * Fija una orientación absoluta en yaw (radianes)
      */
     public void setYaw(double newYaw) {
-        this.yawRef = newYaw;
-        System.out.printf("CMD  | setYaw(%.3f)%n", yawRef);
+        this.yawMode = YawMode.MANUAL;
+        this.yawRef = wrapPi(newYaw);
+        System.out.printf("CMD  | setYaw(%.3f) [MANUAL]%n", yawRef);
+    }
+
+    public void enableAutoYaw() {
+        this.yawMode = YawMode.AUTO_FACE_TARGET;
+        // engancha desde el yaw actual para que no haya salto
+        this.yawRef = imu.getRollPitchYaw()[2];
+        System.out.printf("CMD  | enableAutoYaw() yawRef=%.3f [AUTO]%n", yawRef);
     }
 
     public void run() {
@@ -533,6 +716,15 @@ public class Controlador {
         while (robot.step(timeStep) != -1) {//mientras que que no devuelva -1 la simulación sigue
             if (!motorsArmed) {
                 armMotors();
+            }
+
+            if (stepCount % 50 == 0) { // cada 50 steps
+                int[] img = camera.getImage();
+                if (img != null) {
+                    System.out.println("Camera OK");
+                } else {
+                    System.out.println("Camera NULL");
+                }
             }
             
             // 1) Actualizo baseThrottle con el PID de altitud
@@ -570,11 +762,21 @@ public class Controlador {
                 { -10.0, 10.0, 3.0, 0.0 }    // final
             };
 
-            // Tolerancias y estabilidad (ajusta a gusto)
+            // Tolerancias y estabilidad 
             double posTol = 0.50;      // m (radio en XY)
             double altTol = 0.35;      // m (Z)
             double stableSec = 0.60;   // s dentro del umbral para confirmar "llegó"
             double timeoutSec = 60.0;  // s por waypoint para no quedarte colgado
+
+            c.hoverHere();
+
+            // gira 90º mientras está en hover (manual)
+            c.setYaw(c.imu.getRollPitchYaw()[2] + Math.PI / 2.0);
+            holdSeconds(10);
+
+            c.setYaw(c.imu.getRollPitchYaw()[2] - Math.PI / 2.0);
+            holdSeconds(10);
+
 
             for (int i = 0; i < route.length; i++) {
                 double tx = route[i][0], ty = route[i][1], tz = route[i][2];
