@@ -1,0 +1,5 @@
+MISION PRUEBA;
+a = 10 + 2 * 3;
+b = (10 + 2) * 3;
+setAltitude a;
+setAltitude b;

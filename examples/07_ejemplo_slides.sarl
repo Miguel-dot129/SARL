@@ -1,0 +1,13 @@
+mission EjemploV2;
+
+let alt = 10;
+
+if (alt < 20 and not (alt == 0)) {
+  setAltitude(alt);
+} else {
+  land();
+}
+
+while (alt < 30) {
+  alt = alt + 5;
+}
