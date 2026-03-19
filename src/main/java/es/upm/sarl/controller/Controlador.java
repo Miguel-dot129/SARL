@@ -56,13 +56,38 @@ public class Controlador {
     // Estado PID de altitud
     private double targetAltZ = 1.5;  // objetivo de altitud, la inicializo en 1.5 metros
     private double altIntegral = 0.0; // acumulador del término integral del error de altitud a lo largo del tiempo. Corrige errores persistentes como pequeños descensos por deriva o peso desigual
-    private double prevAltError = 0.0; // guarda el error de altitud anterior para calcular la derivada en el PID (cambio del error en el tiempo).
-
-    // Altitud objetivo "pedida" por la misión vs altitud objetivo "suavizada" por el controlador
+    
+    // Altitud objetivo "pedida" por la misión.
+    // A diferencia de targetAltZ, este valor puede cambiar de golpe
+    // cuando se llama a moveTo(), changeAltitude() o takeoff().
+    //
+    // No se usa directamente en el PID vertical.
+    // Primero se filtra mediante una rampa (ALT_REF_RATE) para obtener
+    // targetAltZ, que es la referencia suavizada que realmente seguirá
+    // el controlador.
+    //
+    // Esta separación evita cambios bruscos de consigna y mejora la estabilidad.
     private double targetAltZCmd = 1.5; // lo que pide moveTo/changeAltitude
+
+    // Velocidad máxima con la que permitimos cambiar la referencia
+    // vertical suavizada (targetAltZ), en metros por segundo.
+    //
+    // Sirve para introducir una "rampa" en la referencia de altitud:
+    // aunque la misión pida un salto brusco, el controlador sube o baja
+    // progresivamente en cada step.
+    //
+    // Esto reduce oscilaciones y evita latigazos en el eje Z.
     private static final double ALT_REF_RATE = 0.8; // m/s (máx subida/bajada)
     
-// Estado adicional para derivada sobre la medida (velocidad vertical)
+    // Estado auxiliar para calcular la derivada sobre la medida en altitud.
+    //
+    // En lugar de derivar el error vertical, estimamos la velocidad real
+    // de subida/bajada a partir de la posición Z medida por el GPS.
+    // Esto permite construir un término derivativo más robusto y evita
+    // el "derivative kick" cuando cambia de golpe la referencia.
+    //
+    // prevZ guarda la altura anterior y zInit indica si esa medida ya
+    // ha sido inicializada correctamente.
     private double prevZ = 0.0;
     private boolean zInit = false;
 
@@ -77,15 +102,6 @@ public class Controlador {
     private double targetX = 0.0;
     private double targetY = 0.0;
 
-    // PD posición -> referencia de ángulo (rollRef, pitchRef)
-    // Ganancias proporcional y derivativa:
-    private static final double POS_KP = 0.125;   // por cada metro de error en X/Y, se aplica esta inclinación (en radianes)
-    private static final double POS_KD = 0.35;   // añade corrección según la velocidad con la que se aproxima al objetivo (frena al llegar)
-
-    // Estado del PID horizontal
-    private double prevPosXError = 0.0; // guarda el error de posición en X del step anterior, necesario para calcular el término derivativo del controlador PD horizontal
-    private double prevPosYError = 0.0; //idem con Y
-
     // Límite de inclinación máxima permitida (en radianes) para pitch y roll. Ajustado a mano
     // evita órdenes de inclinación demasiado agresivas que podrían desestabilizar el dron
     // 0.12 rad aprox 7°: valor conservador para mantener estabilidad y vuelos suaves
@@ -96,40 +112,97 @@ public class Controlador {
     private double rollRef = 0.0;
     private double pitchRef = 0.0;
 
+    // Estado auxiliar para estimar la velocidad horizontal del dron.
+    //
+    // A partir de las posiciones medidas por el GPS en pasos consecutivos,
+    // se aproximan vx y vy derivando la posición respecto al tiempo.
+    //
+    // Esto permite construir un control horizontal basado en velocidad
+    // deseada en lugar de usar directamente solo error de posición.
+    private double prevX = 0.0, prevY = 0.0;
+    private boolean velInit = false;
+
+    // Parámetros del outer-loop horizontal basado en velocidad.
+    //
+    // La idea es:
+    //
+    // - lejos del objetivo: pedir una velocidad de crucero constante
+    // - cerca del objetivo: reducir progresivamente esa velocidad
+    // - convertir el error de velocidad a una inclinación limitada
+    //
+    // Esto produce movimientos más suaves y naturales que un control
+    // puramente proporcional sobre posición.
+    private static final double V_CRUISE = 1.0;   // m/s (velocidad “YOLO-friendly”)
+    private static final double V_STOP_DIST = 1.5; // m: dentro de esta distancia empezamos a frenar
+    private static final double V_KP = 0.20;      // convierte error de velocidad -> tilt (rad)
+    private static final double V_KD = 0.0;      // amortigua (opcional)
+
     // ====== CONTROL DE YAW (ROTACIÓN EN Z) ======
     private double yawRef = 0.0;   // referencia 
 
     private static final double YAW_KP = 1.0;  //Cuanto mas alto mas agresiva es la correccion
     private static final double YAW_KD = 1.5;   // usando rateZ del gyro, frena la correccion antes de que se pase
 
-    // ====== YAW MODE ======
+    // Modo de control de yaw:
+    //
+    // - AUTO_FACE_TARGET:
+    //   el dron ajusta automáticamente su orientación para mirar hacia
+    //   el waypoint o punto objetivo actual.
+    //
+    // - MANUAL:
+    //   el yaw queda fijado a una referencia explícita (yawRef)
+    //   y no se recalcula automáticamente en función del objetivo.
+    //
+    // Esta distinción permite alternar entre:
+    //
+    //   - navegación orientada al movimiento
+    //   - hover o rotaciones controladas manualmente
     private enum YawMode { AUTO_FACE_TARGET, MANUAL }
     private YawMode yawMode = YawMode.AUTO_FACE_TARGET;
 
-    // Solo auto-yaw si el objetivo está "lejos" (evita micro-correcciones al llegar)
+    // Distancia mínima al objetivo a partir de la cual se activa el auto-yaw.
+    //
+    // Si el objetivo está demasiado cerca, no compensa recalcular orientación
+    // continuamente porque puede provocar microcorrecciones molestas al llegar.
+    // Con este umbral, solo orientamos automáticamente el dron cuando todavía
+    // tiene sentido "mirar hacia el siguiente punto".
     private static final double YAW_AUTO_MIN_DIST = 0.8; // m
 
-    // Límite de velocidad con la que cambiamos yawRef (evita giros bruscos)
+    // Velocidad máxima a la que permitimos cambiar yawRef (rad/s).
+    //
+    // Aunque el auto-yaw detecte una nueva orientación deseada,
+    // no saltamos instantáneamente a ella.
+    // En su lugar, yawRef se aproxima poco a poco mediante approachAngle().
+    //
+    // Esto suaviza los giros y evita rotaciones bruscas del dron.
     private static final double YAW_REF_MAX_RATE = 0.6; // rad/s (ajustable)
     
-    // --- Diagnóstico yaw (para logs) ---
+    // Variables de diagnóstico del controlador de yaw.
+    //
+    // No son necesarias para el control en sí, pero permiten registrar
+    // en el CSV cómo evoluciona:
+    //
+    // - el yaw actual
+    // - el error angular
+    // - la velocidad de giro
+    // - la salida de control aplicada
+    //
+    // Son muy útiles para depuración y análisis posterior.
     private double yawNow = 0.0;
     private double yawError = 0.0;
     private double yawRate = 0.0;
     private double yawU = 0.0;
 
-    // --- Velocidad estimada (m/s) ---
-    private double prevX = 0.0, prevY = 0.0;
-    private boolean velInit = false;
-
-    // Control de velocidad (outer-loop)
-    private static final double V_CRUISE = 1.0;   // m/s (velocidad “YOLO-friendly”)
-    private static final double V_STOP_DIST = 1.5; // m: dentro de esta distancia empezamos a frenar
-    private static final double V_KP = 0.20;      // convierte error de velocidad -> tilt (rad)
-    private static final double V_KD = 0.0;      // amortigua (opcional)
-
     private Camera camera;
 
+    // Flag que indica si el dron está ejecutando un aterrizaje controlado.
+    //
+    // Mientras landing sea true, el bucle principal vigila la altura real
+    // y apaga los motores automáticamente cuando el dron ya está muy cerca
+    // del suelo.
+    //
+    // Este flag permite distinguir un simple descenso de un aterrizaje real.
+    private boolean landing = false;
 
     public Controlador() {//constructor
         robot = new Robot();
@@ -213,6 +286,13 @@ public class Controlador {
 
     /**
      * Arranca los motores una sola vez.
+     *
+     * Este método no intenta despegar por sí mismo.
+     * Solo pone las hélices a una velocidad mínima de "idle"
+     * para que el dron quede listo para empezar a generar empuje real.
+     *
+     * Se usa como paso previo al despegue y evita rearmar motores
+     * en cada iteración del bucle principal.
      */
     private void armMotors() {
         rearLeft.setVelocity(IDLE_VELOCITY);
@@ -221,6 +301,29 @@ public class Controlador {
         frontLeft.setVelocity(IDLE_VELOCITY);
 
         motorsArmed = true;
+    }
+
+    /**
+     * Apaga los motores una sola vez y restaura el estado base del controlador.
+     *
+     * Además de poner las hélices a velocidad 0:
+     * - marca los motores como desarmados
+     * - restaura baseThrottle al valor de hover estimado
+     *
+     * Se usa al finalizar un aterrizaje cuando el dron ya está
+     * suficientemente cerca del suelo.
+     */
+    private void shutdownMotors() {
+
+        rearLeft.setVelocity(0.0);
+        rearRight.setVelocity(0.0);
+        frontLeft.setVelocity(0.0);
+        frontRight.setVelocity(0.0);
+
+        motorsArmed = false;
+        baseThrottle = HOVER_THROTTLE;
+
+        System.out.println("Motors OFF");
     }
 
     /**
@@ -647,8 +750,16 @@ public class Controlador {
     /*METODOS DE ALTO NIVEL*/
 
     /**
-     * Fija como objetivo la posición y orientación actuales
-     * Efecto: el dron tenderá a quedarse "como está" (hover aquí).
+     * Fija como objetivo la posición y orientación actuales.
+     *
+     * Efecto:
+     * - El dron tenderá a quedarse en el punto actual
+     * - La altitud objetivo pasa a ser la altura actual
+     * - El yaw queda congelado en modo MANUAL
+     *
+     * Esto es útil para:
+     * - mantener un hover estable tras llegar a un waypoint
+     * - evitar que el auto-yaw siga corrigiendo mientras el dron está parado
      */
     public void hoverHere() {
         double[] pos = gps.getValues();
@@ -669,7 +780,12 @@ public class Controlador {
     }
 
     /**
-     * Cambia la altitud objetivo, manteniendo X/Y/Yaw.
+     * Cambia la altitud objetivo manteniendo la posición horizontal actual.
+     *
+     * No modifica targetX, targetY ni yawRef.
+     * Solo actualiza targetAltZCmd, por lo que la transición vertical
+     * se realizará de forma progresiva mediante la rampa del controlador
+     * de altitud.
      */
     public void changeAltitude(double newAlt) {
          targetAltZCmd = newAlt;
@@ -677,8 +793,16 @@ public class Controlador {
     }
 
     /**
-     * Ordena volar hasta el punto (x, y, z) en coordenadas del mundo
-     * El yawRef actual se mantiene (0)
+     * Ordena volar hasta un punto objetivo en coordenadas del mundo.
+     *
+     * Efectos principales:
+     * - actualiza el objetivo horizontal (targetX, targetY)
+     * - actualiza la altitud objetivo pedida (targetAltZCmd)
+     * - activa el modo AUTO_FACE_TARGET para que el dron
+     *   tienda a orientar el morro hacia el nuevo destino
+     *
+     * La referencia vertical no cambia de golpe:
+     * targetAltZCmd se filtrará progresivamente en PDAltitudeControl().
      */
     public void moveTo(double x, double y, double z) {
         targetX = x;
@@ -695,7 +819,14 @@ public class Controlador {
     }
 
     /**
-     * Fija una orientación absoluta en yaw (radianes)
+     * Fija una orientación absoluta de yaw en radianes.
+     *
+     * Al llamar a este método:
+     * - se desactiva el auto-yaw
+     * - el controlador pasa a modo MANUAL
+     * - yawRef queda fijado al ángulo indicado, normalizado a [-pi, pi]
+     *
+     * Es útil para pruebas de giro, inspección visual o hover orientado.
      */
     public void setYaw(double newYaw) {
         this.yawMode = YawMode.MANUAL;
@@ -703,6 +834,16 @@ public class Controlador {
         System.out.printf("CMD  | setYaw(%.3f) [MANUAL]%n", yawRef);
     }
 
+    /**
+     * Reactiva el auto-yaw.
+     *
+     * A partir de este momento, la referencia de yaw volverá a ajustarse
+     * automáticamente para mirar hacia el objetivo cuando este esté
+     * suficientemente lejos.
+     *
+     * Además, yawRef se inicializa con el yaw actual para evitar saltos
+     * bruscos al cambiar de modo.
+     */
     public void enableAutoYaw() {
         this.yawMode = YawMode.AUTO_FACE_TARGET;
         // engancha desde el yaw actual para que no haya salto
@@ -710,31 +851,156 @@ public class Controlador {
         System.out.printf("CMD  | enableAutoYaw() yawRef=%.3f [AUTO]%n", yawRef);
     }
 
+    /**
+     * Método de alto nivel para iniciar un despegue controlado.
+     *
+     * Flujo general:
+     * - Si los motores ya están armados, el comando se ignora
+     * - Se arrancan los motores en modo idle
+     * - Se fijan X/Y actuales como referencia para despegar en vertical
+     * - Se establece la altitud actual como referencia inicial
+     * - Se pide una nueva altitud objetivo mediante targetAltZCmd
+     * - Se reinicia el estado interno del PID vertical
+     * - Se congela el yaw actual en modo MANUAL
+     * - Se desactiva el estado de aterrizaje
+     *
+     * El ascenso real no ocurre aquí instantáneamente:
+     * se produce progresivamente dentro del bucle run().
+     */
+    public void takeoff(double altitude) {
+
+        if (motorsArmed) {
+            System.out.printf("CMD | takeoff(%.2f) ignorado: motores ya armados%n", altitude);
+            return;
+        }
+
+        armMotors();
+
+        double[] pos = gps.getValues();
+        double[] rpy = imu.getRollPitchYaw();
+
+        // Mantener la posición actual en XY
+        targetX = pos[0];
+        targetY = pos[1];
+
+        // Fijar referencia actual y objetivo de subida
+        targetAltZ = pos[2];
+        targetAltZCmd = altitude;
+
+        // Reiniciamos estado del PID vertical para un despegue limpio
+        altIntegral = 0.0;
+        prevZ = pos[2];
+        zInit = true;
+
+        // Mantener yaw actual
+        yawMode = YawMode.MANUAL;
+        yawRef = rpy[2];
+
+        landing = false;
+
+        System.out.printf("CMD | takeoff(%.2f) -> motores ON y ascendiendo%n", altitude);
+    }
+
+    /**
+     * Método de alto nivel para iniciar un aterrizaje controlado.
+     *
+     * Flujo general:
+     * - Si los motores ya están apagados, el comando se ignora
+     * - Se fijan X/Y actuales para descender sin desplazarse
+     * - Se congela el yaw actual en modo MANUAL
+     * - Se fija una altitud objetivo muy baja
+     * - Se activa el flag landing
+     *
+     * El apagado real de motores no se hace aquí directamente.
+     * Se realiza en run() cuando el dron detecta que ya está
+     * suficientemente cerca del suelo.
+     */
+    public void land() {
+
+        if (!motorsArmed) {
+            System.out.println("CMD | land() ignorado: motores ya apagados");
+            return;
+        }
+
+        double[] pos = gps.getValues();
+
+        // Mantener XY actual mientras baja
+        targetX = pos[0];
+        targetY = pos[1];
+
+        // Mantener yaw actual durante el descenso
+        yawMode = YawMode.MANUAL;
+        yawRef = imu.getRollPitchYaw()[2];
+
+        // Pedir descenso
+        targetAltZCmd = 0.05;
+        landing = true;
+
+        System.out.println("CMD | land() -> descendiendo");
+    }
+
+    /**
+     * Devuelve la posición actual medida por el GPS.
+     *
+     * Este getter se expone para permitir que capas superiores
+     * (por ejemplo, un adapter de misión) consulten el estado
+     * real del dron sin acceder directamente a los sensores internos.
+     */
+    public double[] getCurrentPosition() {
+        return gps.getValues();
+    }
+
+    /**
+     * Devuelve el yaw actual medido por la IMU.
+     *
+     * Este getter permite exponer la orientación real del dron
+     * a capas superiores del sistema sin romper la encapsulación
+     * del controlador.
+     */
+    public double getCurrentYaw() {
+        return imu.getRollPitchYaw()[2];
+    }
+
+    /**
+     * Bucle principal de control continuo del dron en Webots.
+     *
+     * Mientras la simulación siga activa:
+     * - si los motores están armados, ejecuta los lazos de control:
+     *   1) altitud
+     *   2) horizontal
+     *   3) actitud
+     * - si hay un aterrizaje en curso, comprueba si ya se ha tocado
+     *   prácticamente el suelo para apagar motores
+     * - registra el estado actual en el CSV
+     *
+     * Importante:
+     * - La lógica de alto nivel (takeoff, moveTo, land, etc.)
+     *   solo modifica referencias y flags.
+     * - El movimiento real del dron se produce aquí, step a step.
+     */
     public void run() {
         int stepCount = 0; // Contador 
 
         while (robot.step(timeStep) != -1) {//mientras que que no devuelva -1 la simulación sigue
-            if (!motorsArmed) {
-                armMotors();
-            }
+            
+            //Solo controlamos si los motores están encendidos
+            if (motorsArmed) {
+                // 1) Actualizo baseThrottle con el PID de altitud
+                PDAltitudeControl();
 
-            if (stepCount % 50 == 0) { // cada 50 steps
-                int[] img = camera.getImage();
-                if (img != null) {
-                    System.out.println("Camera OK");
-                } else {
-                    System.out.println("Camera NULL");
+                // 2) Actualizamos las referencias de actitud a partir de la posición (X, Y)
+                PDHorizontalControl();
+
+                // 3) estabilizamos y sumamos potencias totales a los motores dentro del metodo
+                PDAttitude(rollRef, pitchRef);
+
+                // 4) Si estamos aterrizando y ya casi tocamos suelo, apagamos motores
+                double[] pos = gps.getValues();
+                if (landing && pos[2] < 0.15) {
+                    shutdownMotors();
+                    landing = false;
                 }
             }
-            
-            // 1) Actualizo baseThrottle con el PID de altitud
-            PDAltitudeControl();
-
-            // 2) Actualizamos las referencias de actitud a partir de la posición (X, Y)
-            PDHorizontalControl();
-
-            // 3) estabilizamos y sumamos potencias totales a los motores dentro del metodo
-            PDAttitude(rollRef, pitchRef);
 
             logState(stepCount); 
 
@@ -743,6 +1009,21 @@ public class Controlador {
         
     }
  
+    /**
+     * Main interno de pruebas del controlador.
+     *
+     * No forma parte de la ejecución oficial de SARL.
+     * Se conserva como entorno de validación aislada del controlador
+     * para probar:
+     * - despegue
+     * - aterrizaje
+     * - hover
+     * - yaw manual
+     * - navegación por waypoints
+     *
+     * Esto permite depurar el comportamiento físico del dron
+     * sin necesidad de pasar todavía por el lenguaje o el runtime.
+     */
     public static void main(String[] args) {
         Controlador c = new Controlador();
 
@@ -751,8 +1032,19 @@ public class Controlador {
         controlThread.start();
 
         try {
-            Thread.sleep(6000); // dejar que estabilice y coja altura
+            Thread.sleep(10000); // dejar que estabilice y coja altura
 
+            System.out.println("TEST: takeoff");
+            c.takeoff(3.0);
+            Thread.sleep(15000);
+
+            System.out.println("TEST: land");
+            c.land();
+            Thread.sleep(8000);
+
+            c.takeoff(3.0);
+
+            Thread.sleep(10000); // dejar que estabilice y coja altura
             // Ruta de prueba: {x,y,z, holdSeconds}
             // holdSeconds = 0 -> no hace pausa
             double[][] route = new double[][] {
@@ -808,7 +1100,22 @@ public class Controlador {
         }
     }
 
-    /** Espera hasta que esté dentro del umbral durante stableSec (evita falsos positivos por bamboleo). */
+    /**
+     * Espera hasta confirmar que el dron ha llegado a un objetivo.
+     *
+     * La llegada no se considera válida en cuanto entra un instante
+     * en el umbral, sino solo si permanece dentro de él durante
+     * stableSec segundos.
+     *
+     * Esto reduce falsos positivos debidos a:
+     * - bamboleo
+     * - pequeñas oscilaciones
+     * - cruces rápidos por el entorno del waypoint
+     *
+     * Devuelve:
+     * - true  si la llegada se confirma correctamente
+     * - false si se supera el timeout
+     */
     private static boolean waitUntilArrived(
             Controlador c,
             double tx, double ty, double tz,
@@ -856,6 +1163,13 @@ public class Controlador {
         }
     }
 
+    /**
+     * Pausa auxiliar usada en el main de pruebas para mantener
+     * el dron en un estado determinado durante un tiempo dado.
+     *
+     * No interviene en el control del dron como tal;
+     * solo se usa para secuenciar la demo manual del controlador.
+     */
     private static void holdSeconds(double seconds) throws InterruptedException {
         long ms = (long) (seconds * 1000.0);
         Thread.sleep(Math.max(0, ms));
