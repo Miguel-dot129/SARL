@@ -29,11 +29,80 @@ stmt
   | whileStmt //bucle (while)
   ;
 
-//LLAMADA A FUNCION (comando)
-// por ejemplo setHome 0, 0, 0;
+// LLAMADA A COMANDO DE MISIÓN:
+//
+// Permite invocar acciones definidas por el runtime.
+// Ejemplos:
+//
+//    takeoff 10;
+//    moveTo (10,5,3);
+//    hover 2;
+//
+// Los argumentos se interpretan dinámicamente
+// en el intérprete.
 callStmt
-  : ID SEMI
-  | ID argList SEMI
+  : ID callArgs? SEMI
+  ;
+
+
+callArgs
+  : callArg+
+  ;
+
+// Argumentos posibles en una llamada.
+//
+// Pueden ser:
+//
+//  - expresiones numéricas
+//  - puntos 2D
+//  - puntos 3D
+//
+// Esto permite escribir comandos de forma natural:
+//
+//   setHome (0,0,0);
+//   moveTo (x,y,z);
+callArg
+  : expr
+  | point2D
+  | point3D
+  ;
+
+// PUNTO 2D:
+// Representa una coordenada bidimensional del plano:
+//
+//    (x, y)
+//
+// Cada componente no tiene por qué ser un literal numérico fijo;
+// puede ser cualquier expresión válida de SARL.
+// Ejemplos válidos:
+//
+//    (0,0)
+//    (x,y)
+//    (2+3, distancia)
+//
+// Esto es importante porque permite construir geometría de misión
+// usando variables y expresiones calculadas.
+point2D
+  : LPAREN expr COMMA expr RPAREN
+  ;
+
+// PUNTO 3D:
+// Representa una coordenada espacial completa:
+//
+//    (x, y, z)
+//
+// Igual que en point2D, cada componente puede ser una expresión,
+// no solo un número literal.
+//
+// Ejemplos válidos:
+//
+//    (0,0,10)
+//    (homeX, homeY, altitud)
+//    (x+1, y-2, 5)
+//
+// Esta regla permite expresar posiciones completas del dron
+point3D
+  : LPAREN expr COMMA expr COMMA expr RPAREN
   ;
 
 
@@ -42,12 +111,6 @@ callStmt
 // Sintaxis: nombre = expresión;
 assignStmt
   : ID ASSIGN expr SEMI
-  ;
-
-// LISTA DE ARGUMENTOS:
-// Una o más expresiones separadas por comas
-argList
-  : expr (COMMA expr)* //una expresion seguido de 0...N expresiones más separados por coma
   ;
 
 // EXPRESIONES ARITMÉTICAS CON PRECEDENCIA:
